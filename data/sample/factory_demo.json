@@ -31,6 +31,22 @@
       "min_lot_size": 20,
       "lot_size_multiple": 20,
       "post_production_buffer_hours": 6
+    },
+    {
+      "id": "P-STOOL",
+      "name": "Ghế đẩu nhựa Model C",
+      "uom": "cái",
+      "bom": [
+        {"component_id": "C-LEG", "qty_per_unit": 3, "scrap_rate": 0.02},
+        {"component_id": "C-BOLT", "qty_per_unit": 6, "scrap_rate": 0.05}
+      ],
+      "min_lot_size": 30,
+      "lot_size_multiple": 30,
+      "post_production_buffer_hours": 2,
+      "planning_strategy": "make_to_stock",
+      "reorder_point": 100,
+      "target_stock_level": 300,
+      "replenishment_priority": "NORMAL"
     }
   ],
   "components": [
@@ -123,7 +139,8 @@
         "exceptions": []
       },
       "product_rates": [
-        {"product_id": "P-CHAIR", "rate_per_hour": 25, "changeover_minutes": 20, "required_headcount": 2}
+        {"product_id": "P-CHAIR", "rate_per_hour": 25, "changeover_minutes": 20, "required_headcount": 2},
+        {"product_id": "P-STOOL", "rate_per_hour": 30, "changeover_minutes": 15, "required_headcount": 2}
       ],
       "labor_pool_id": "POOL-LAP-RAP"
     }
@@ -184,10 +201,18 @@
       "period_start": "2026-09-01T00:00:00",
       "period_end": "2026-09-15T00:00:00",
       "qty": 500
+    },
+    {
+      "id": "FC-2026-09-STOOL",
+      "product_id": "P-STOOL",
+      "period_start": "2026-09-01T00:00:00",
+      "period_end": "2026-09-15T00:00:00",
+      "qty": 250
     }
   ],
   "finished_goods_inventory": [
     {"product_id": "P-CHAIR", "on_hand_qty": 100},
-    {"product_id": "P-TABLE", "on_hand_qty": 0}
+    {"product_id": "P-TABLE", "on_hand_qty": 0},
+    {"product_id": "P-STOOL", "on_hand_qty": 80}
   ]
 }

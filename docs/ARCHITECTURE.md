@@ -82,7 +82,66 @@ Planning & Scheduling) — chuẩn công nghiệp là 2 giai đoạn tách rời
 kết chặt: MRP quyết định "khi nào có NVL để bắt đầu", APS quyết định "bắt đầu
 ở đâu, chạy đến khi nào".
 
-## 3. Luồng xử lý (pipeline.py)
+## 3. Chiến lược lập kế hoạch: Make-to-Order (MTO) vs Make-to-Stock (MTS)
+
+Mọi thứ ở mục 1-2 mô tả nhu cầu theo kiểu **Make-to-Order (MTO)**: mỗi PO/kỳ
+Forecast sinh ra MỘT lệnh sản xuất riêng, hạn giao = ETD mục tiêu của chính
+PO/Forecast đó. Đây là mặc định, phù hợp khi sản xuất gắn trực tiếp với đơn
+hàng cụ thể.
+
+Nhiều sản phẩm thực tế lại sản xuất **để tồn kho (Make-to-Stock, MTS)** — sản
+xuất theo lô lớn, đều đặn, để LUÔN CÓ SẴN hàng trong kho, khách đặt là xuất
+ngay, không đợi sản xuất. Với các sản phẩm này, gắn 1 lệnh sản xuất cho từng
+PO là sai bản chất: PO chỉ nên **rút hàng từ kho có sẵn**, còn việc "khi nào
+sản xuất, sản xuất bao nhiêu" phải dựa vào MỨC TỒN KHO, không phải từng đơn.
+
+Chọn chiến lược qua `Product.planning_strategy` (`models.PlanningStrategy`,
+mặc định `make_to_order`). Khi đặt `make_to_stock`, sản phẩm cần thêm 2
+tham số chính sách tồn kho:
+
+| Field | Ý nghĩa |
+|---|---|
+| `reorder_point` | Ngưỡng tồn kho dự kiến — chạm ngưỡng này là phải có lệnh sản xuất bổ sung |
+| `target_stock_level` | Mức tồn kho mục tiêu sau khi bổ sung (up-to-level); phải > `reorder_point` (validate ở `Product`) |
+| `replenishment_priority` | Độ ưu tiên gán cho các lệnh bổ sung tự sinh (mặc định NORMAL) — cùng thang với PO nên vẫn cạnh tranh nguyên vật liệu/dây chuyền công bằng với các đơn MTO khác theo đúng độ ưu tiên |
+
+### Thuật toán (demand.build_mts_replenishment_lines)
+
+Với sản phẩm MTS, PO/Forecast **không** sinh `DemandLine` riêng — chúng được
+gộp thành một dòng thời gian các **sự kiện tiêu thụ tồn kho** (PO tại ETD mục
+tiêu của nó, Forecast tại `period_end`, đã net PO-trong-kỳ như MTO). Sau đó
+mô phỏng tồn kho dự kiến (time-phased) đi qua các sự kiện này theo thứ tự
+thời gian:
+
+```
+tồn kho = tồn kho hiện tại (FinishedGoodsInventory)
+nếu tồn kho <= reorder_point ngay từ đầu: sinh lệnh bổ sung NGAY (due_date = "hiện tại")
+
+với mỗi sự kiện tiêu thụ (theo thời gian tăng dần):
+    tồn kho -= qty tiêu thụ
+    nếu tồn kho <= reorder_point:
+        sinh 1 DemandLine (source=REPLENISHMENT) qty = target_stock_level - tồn kho,
+        due_date = thời điểm sự kiện này (hạn PHẢI CÓ hàng bổ sung)
+        tồn kho += qty vừa sinh   # coi như bổ sung "về kho" ngay để mô phỏng tiếp
+```
+
+Đây chính là phương pháp reorder-point/up-to-level (chính sách `(s, S)`) kinh
+điển trong quản lý tồn kho, dùng chung kỹ thuật "đường cung tích luỹ theo thời
+gian" như MRP linh kiện ở mục 6 — chỉ khác là áp dụng cho TỒN KHO THÀNH PHẨM
+thay vì linh kiện đầu vào.
+
+`DemandLine` sinh ra từ nhánh MTS có `due_date` = "hạn phải có hàng bổ sung"
+và đi qua **CHÍNH XÁC CÙNG một scheduler** như đơn MTO (cùng là ràng buộc MỀM,
+mục 7) — nghĩa là lệnh bổ sung tồn kho cạnh tranh sòng phẳng về nguyên vật
+liệu và dây chuyền với các PO khác theo đúng độ ưu tiên, không có đối xử đặc
+biệt. Ví dụ trong `data/sample/factory_demo.json`: `P-STOOL` (MTS) có tồn
+kho ban đầu dưới `reorder_point` nên cần bổ sung ngay, nhưng vì linh kiện
+dùng chung (`C-LEG`) đã bị 2 PO ưu tiên HIGH giành hết tồn kho sẵn có, lệnh
+bổ sung này phải đợi đến lô nhập linh kiện tiếp theo mới có NVL để sản xuất —
+kết quả là bị trễ so với hạn "bổ sung ngay", đúng như hành vi mong đợi của
+ràng buộc mềm.
+
+## 4. Luồng xử lý (pipeline.py)
 
 ```
 demand.build_demand_lines()
@@ -109,7 +168,7 @@ eta_etd.build_plan_report()
   -> PlanReport
 ```
 
-## 4. Mô hình lịch làm việc (calendar.py) — "trục thời gian nén"
+## 5. Mô hình lịch làm việc (calendar.py) — "trục thời gian nén"
 
 Mỗi dây chuyền có lịch làm việc riêng (ca kíp theo tuần + ngoại lệ theo
 ngày: nghỉ lễ / tăng ca). Thay vì lập lịch trên trục thời gian thực (dễ phải
@@ -125,7 +184,7 @@ xét bằng số slot làm việc *trước* thời điểm đó — hàm đơn 
 việc so sánh "hoàn thành trước/sau hạn" vẫn đúng dù `due_date` rơi đúng vào
 giờ nghỉ.
 
-## 5. MRP — phân bổ tồn kho/linh kiện theo thứ tự ưu tiên (mrp.py)
+## 6. MRP — phân bổ tồn kho/linh kiện theo thứ tự ưu tiên (mrp.py)
 
 Với mỗi linh kiện, dựng "đường cung tích luỹ":
 
@@ -148,7 +207,7 @@ cung trong toàn bộ các lô đã biết, đơn bị đánh dấu `blocked` k�
 thiếu hụt để bộ phận mua hàng xử lý — các đơn này **không** được đưa vào
 scheduler (không thể lập lịch sản xuất khi chưa biết bao giờ có NVL).
 
-## 6. Scheduler — CP-SAT (scheduler.py)
+## 7. Scheduler — CP-SAT (scheduler.py)
 
 Biến quyết định: với mỗi cặp (đơn, dây chuyền đủ điều kiện) khả thi trong
 horizon, có `assigned` (bool) + `start`/`end` (interval trên trục nén của
@@ -162,22 +221,22 @@ Ràng buộc:
 | Dây chuyền chạy 1 lệnh/lúc, đúng giờ làm việc | `AddNoOverlap` trên interval (trục đã nén theo lịch riêng từng line) |
 | Không sản xuất trước khi có NVL | domain của `start` bắt đầu từ slot sớm nhất ≥ ETA |
 | Nhân lực dùng chung nhiều dây chuyền | `AddCumulative` gộp interval của các line cùng tổ **nếu các line đó có lịch làm việc giống hệt nhau** (cùng toạ độ trục nén) |
-| Ưu tiên đơn gấp/quan trọng, **ETD mục tiêu là ràng buộc MỀM** | mục tiêu tối thiểu hoá **tổng trễ hạn có trọng số** so với `due_date` (= ETD mục tiêu, mục 2) theo priority (HIGH=100, NORMAL=10, LOW=1). Đơn không kịp ETD mục tiêu vẫn được xếp lịch (trễ), KHÔNG bị loại khỏi kế hoạch — chỉ những đơn thiếu NVL (xem mục 5) hoặc hết chỗ trong horizon lập kế hoạch mới bị loại (`unscheduled`). |
+| Ưu tiên đơn gấp/quan trọng, **ETD mục tiêu là ràng buộc MỀM** | mục tiêu tối thiểu hoá **tổng trễ hạn có trọng số** so với `due_date` (= ETD mục tiêu, mục 2) theo priority (HIGH=100, NORMAL=10, LOW=1). Đơn không kịp ETD mục tiêu vẫn được xếp lịch (trễ), KHÔNG bị loại khỏi kế hoạch — chỉ những đơn thiếu NVL (xem mục 6) hoặc hết chỗ trong horizon lập kế hoạch mới bị loại (`unscheduled`). |
 
-## 7. ETA / ETD — tổng hợp lại 3 mốc trong `PlanLine` (eta_etd.py)
+## 8. ETA / ETD — tổng hợp lại 3 mốc trong `PlanLine` (eta_etd.py)
 
 `eta_etd.build_plan_report()` gộp 3 mốc thời gian (đã giải thích ở mục 2)
 thành từng dòng `PlanLine`:
 
-- `eta`: **ETA nguyên vật liệu** — đầu ra của MRP (mục 5), khi nào đủ NVL để
+- `eta`: **ETA nguyên vật liệu** — đầu ra của MRP (mục 6), khi nào đủ NVL để
   bắt đầu sản xuất đơn này.
 - `etd`: **ETD hệ thống tính** = thời điểm sản xuất hoàn thành (đầu ra
-  scheduler, mục 6) + thời gian QC/đóng gói (`Product.post_production_buffer_hours`).
+  scheduler, mục 7) + thời gian QC/đóng gói (`Product.post_production_buffer_hours`).
 - `due_date`: **ETD mục tiêu** — quy đổi từ `SalesOrder.requested_eta`/
   `requested_etd` (PO) hoặc `period_end` (Forecast), xem mục 2.
 - `on_time = (etd <= due_date)`, `delay_hours = max(0, etd − due_date)`.
 
-## 8. Giới hạn & hướng mở rộng (v1)
+## 9. Giới hạn & hướng mở rộng (v1)
 
 Đây là một MVP có kiến trúc đúng đắn cho bài toán thật, nhưng có vài đơn giản
 hoá được ghi nhận rõ ràng để dễ mở rộng:
@@ -211,3 +270,17 @@ hoá được ghi nhận rõ ràng để dễ mở rộng:
    cần tách thành entity `ShippingLane` riêng (khách hàng × phương thức/kho
    nhận → lead time), PO tham chiếu `shipping_lane_id` thay vì `customer_id`
    trực tiếp.
+8. **Mô phỏng tồn kho MTS (mục 3) là ĐIỂM (point simulation), không phải MRP
+   time-phased đầy đủ** — bỏ qua các lệnh bổ sung ĐÃ ĐANG SẢN XUẤT (open
+   replenishment orders chưa hoàn thành) khi tính tồn kho dự kiến ở lần chạy
+   kế hoạch tiếp theo; mỗi lần `run_planning()` chạy lại từ đầu dựa trên
+   `FinishedGoodsInventory.on_hand_qty` hiện tại, không "nhớ" các lệnh bổ
+   sung đã sinh ở lần chạy trước. Phù hợp cho lập kế hoạch định kỳ (chạy lại
+   mỗi ngày/tuần với tồn kho mới nhất) nhưng chưa tối ưu cho theo dõi liên
+   tục trong ngày. Hướng mở rộng: thêm khái niệm "lệnh sản xuất đang mở"
+   (open production order, có qty + expected completion date) như một nguồn
+   cung bổ sung trong mô phỏng, tương tự `Component.incoming_receipts`.
+9. **1 chính sách tồn kho duy nhất cho mỗi sản phẩm MTS** — không hỗ trợ
+   tồn kho mục tiêu thay đổi theo mùa vụ (vd. tăng target_stock_level trước
+   mùa cao điểm). Có thể mở rộng bằng cách cho `reorder_point`/
+   `target_stock_level` biến thiên theo khoảng thời gian thay vì hằng số.

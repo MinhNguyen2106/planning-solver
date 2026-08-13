@@ -1,7 +1,8 @@
 """Điểm vào (entry point) chạy toàn bộ pipeline lập kế hoạch sản xuất:
 
     PO + Forecast
-        -> demand.build_demand_lines()          (net nhu cầu, trừ tồn kho TP)
+        -> demand.build_demand_lines()          (MTO: net theo đơn; MTS: mô
+                                                   phỏng tồn kho -> lệnh bổ sung)
         -> mrp.allocate_materials()              (tính ETA nguyên vật liệu)
         -> scheduler.schedule_production()       (xếp lịch dây chuyền, CP-SAT)
         -> eta_etd.build_plan_report()           (tính ETD, so sánh due date)
@@ -34,7 +35,7 @@ def run_planning(
     """
     horizon_end = planning_start + timedelta(days=horizon_days)
 
-    demand_lines = build_demand_lines(dataset)
+    demand_lines = build_demand_lines(dataset, reference_start=planning_start)
     material_readiness = allocate_materials(demand_lines, dataset, planning_start)
     schedule_result = schedule_production(
         demand_lines,

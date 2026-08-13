@@ -22,6 +22,26 @@ from pydantic import BaseModel, Field, model_validator
 
 
 # ---------------------------------------------------------------------------
+# Độ ưu tiên (dùng chung bởi PO, Forecast, và lệnh bổ sung tồn kho MTS)
+# ---------------------------------------------------------------------------
+
+class OrderPriority(str, Enum):
+    HIGH = "HIGH"
+    NORMAL = "NORMAL"
+    LOW = "LOW"
+
+
+PRIORITY_RANK: dict["OrderPriority", int] = {
+    OrderPriority.HIGH: 0,
+    OrderPriority.NORMAL: 1,
+    OrderPriority.LOW: 2,
+}
+"""Thứ hạng ưu tiên dùng để sắp xếp/so sánh (số nhỏ hơn = ưu tiên cao hơn).
+OrderPriority là string Enum (để dữ liệu JSON dễ đọc: "HIGH"/"NORMAL"/"LOW"),
+nên mọi so sánh thứ tự phải tra qua bảng này thay vì dùng .value trực tiếp."""
+
+
+# ---------------------------------------------------------------------------
 # Lịch làm việc (working calendar)
 # ---------------------------------------------------------------------------
 
@@ -127,6 +147,23 @@ class LineProductRate(BaseModel):
     required_headcount: int = Field(default=0, ge=0, description="Số nhân công cần để vận hành dây chuyền cho SP này")
 
 
+class PlanningStrategy(str, Enum):
+    """Chiến lược lập kế hoạch sản xuất cho một sản phẩm - xem demand.py."""
+
+    MAKE_TO_ORDER = "make_to_order"
+    """MTO (mặc định): mỗi PO/kỳ Forecast của sản phẩm này sinh ra MỘT lệnh
+    sản xuất riêng, hạn giao (due_date) = ETD mục tiêu của chính PO/Forecast
+    đó. Đây là hành vi gốc của hệ thống (xem demand.build_demand_lines)."""
+
+    MAKE_TO_STOCK = "make_to_stock"
+    """MTS: PO/Forecast của sản phẩm này KHÔNG sinh lệnh sản xuất riêng từng
+    cái - chúng chỉ là các sự kiện TIÊU THỤ tồn kho thành phẩm. Hệ thống mô
+    phỏng tồn kho dự kiến theo thời gian và tự sinh lệnh BỔ SUNG TỒN KHO
+    (`DemandSource.REPLENISHMENT`) mỗi khi tồn kho dự kiến chạm
+    `reorder_point`, với số lượng đủ đưa tồn kho về `target_stock_level`
+    (xem demand.build_mts_replenishment_lines)."""
+
+
 class Product(BaseModel):
     id: str
     name: str
@@ -137,6 +174,32 @@ class Product(BaseModel):
     post_production_buffer_hours: float = Field(
         default=0, ge=0, description="Thời gian QC/đóng gói sau khi sản xuất xong trước khi có thể xuất (ETD)"
     )
+    planning_strategy: PlanningStrategy = PlanningStrategy.MAKE_TO_ORDER
+
+    # --- Chỉ áp dụng khi planning_strategy = MAKE_TO_STOCK ---
+    reorder_point: float = Field(
+        default=0, ge=0,
+        description="[MTS] Ngưỡng tồn kho dự kiến kích hoạt lệnh bổ sung tồn kho",
+    )
+    target_stock_level: float = Field(
+        default=0, ge=0,
+        description="[MTS] Mức tồn kho mục tiêu sau khi bổ sung (up-to-level)",
+    )
+    replenishment_priority: OrderPriority = Field(
+        default=OrderPriority.NORMAL,
+        description="[MTS] Độ ưu tiên gán cho các lệnh bổ sung tồn kho tự sinh",
+    )
+
+    @model_validator(mode="after")
+    def _check_mts_policy(self) -> "Product":
+        if self.planning_strategy == PlanningStrategy.MAKE_TO_STOCK and (
+            self.target_stock_level <= self.reorder_point
+        ):
+            raise ValueError(
+                f"Sản phẩm '{self.id}': MAKE_TO_STOCK yêu cầu target_stock_level "
+                f"({self.target_stock_level}) > reorder_point ({self.reorder_point})."
+            )
+        return self
 
     def round_up_lot(self, qty: float) -> float:
         """Làm tròn số lượng theo min lot size & bội số lô."""
@@ -172,22 +235,6 @@ class WorkforcePool(BaseModel):
 # ---------------------------------------------------------------------------
 # Nhu cầu: PO (đơn hàng bán) & Forecast
 # ---------------------------------------------------------------------------
-
-class OrderPriority(str, Enum):
-    HIGH = "HIGH"
-    NORMAL = "NORMAL"
-    LOW = "LOW"
-
-
-PRIORITY_RANK: dict["OrderPriority", int] = {
-    OrderPriority.HIGH: 0,
-    OrderPriority.NORMAL: 1,
-    OrderPriority.LOW: 2,
-}
-"""Thứ hạng ưu tiên dùng để sắp xếp/so sánh (số nhỏ hơn = ưu tiên cao hơn).
-OrderPriority là string Enum (để dữ liệu JSON dễ đọc: "HIGH"/"NORMAL"/"LOW"),
-nên mọi so sánh thứ tự phải tra qua bảng này thay vì dùng .value trực tiếp."""
-
 
 class DateCountMode(str, Enum):
     """Cách đếm ngày khi cộng/trừ ngày tháng cho ETA/ETD (transit lead time,
@@ -283,6 +330,12 @@ class FinishedGoodsInventory(BaseModel):
 class DemandSource(str, Enum):
     SALES_ORDER = "sales_order"
     FORECAST = "forecast"
+    REPLENISHMENT = "replenishment"
+    """Lệnh bổ sung tồn kho tự sinh cho sản phẩm MAKE_TO_STOCK - không gắn
+    với một PO/Forecast cụ thể, mà với thời điểm tồn kho dự kiến chạm
+    reorder_point (xem demand.build_mts_replenishment_lines). `ref_id` của
+    DemandLine loại này có dạng "{product_id}#{số thứ tự}", không phải ID
+    của một SalesOrder/ForecastEntry."""
 
 
 class DemandLine(BaseModel):
@@ -290,10 +343,14 @@ class DemandLine(BaseModel):
 
     `due_date` là **ETD mục tiêu** (commitment ETD) mà sản xuất phải hoàn
     thành trước đó:
-      - Với PO: quy đổi từ `requested_etd` (dùng trực tiếp) hoặc từ
-        `requested_eta` trừ `transit_lead_time_days` của khách hàng
-        (xem `demand.commitment_etd()`).
-      - Với Forecast: dùng `period_end` (dự báo không có ETA/ETD riêng).
+      - Với PO (sản phẩm MAKE_TO_ORDER): quy đổi từ `requested_etd` (dùng
+        trực tiếp) hoặc từ `requested_eta` trừ `transit_lead_time_days` của
+        khách hàng (xem `demand.commitment_etd()`).
+      - Với Forecast (MAKE_TO_ORDER): dùng `period_end`.
+      - Với lệnh bổ sung tồn kho (MAKE_TO_STOCK, `source=REPLENISHMENT`):
+        ngày tồn kho dự kiến CHẠM `reorder_point` - tức hạn chót phải có
+        hàng bổ sung để tránh hụt dưới ngưỡng an toàn (xem
+        `demand.build_mts_replenishment_lines`).
     Đây là mục tiêu MỀM cho scheduler (được đưa vào hàm mục tiêu tối thiểu
     hoá trễ hạn có trọng số, không phải ràng buộc cứng loại đơn khỏi kế
     hoạch) - xem scheduler.py.
@@ -305,7 +362,9 @@ class DemandLine(BaseModel):
     due_date: datetime
     priority: OrderPriority
     source: DemandSource
-    ref_id: str = Field(description="ID của SalesOrder hoặc ForecastEntry gốc")
+    ref_id: str = Field(
+        description="ID của SalesOrder/ForecastEntry gốc, hoặc '{product_id}#{n}' nếu source=REPLENISHMENT"
+    )
 
 
 # ---------------------------------------------------------------------------

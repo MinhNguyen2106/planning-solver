@@ -4,7 +4,7 @@ Hệ thống lập kế hoạch sản xuất nhà máy: nhận **PO (đơn hàng
 (dự báo)** làm đầu vào, tính toán **ETA/ETD**, và sinh ra **lịch sản xuất**
 tôn trọng đồng thời các ràng buộc về:
 
-- **Sản phẩm** (BOM/định mức nguyên vật liệu, lot size)
+- **Sản phẩm** (BOM/định mức nguyên vật liệu, lot size, chiến lược **Make-to-Order hoặc Make-to-Stock** - xem bên dưới)
 - **Dây chuyền sản xuất** (năng suất theo sản phẩm, thời gian chuyển đổi)
 - **Thời gian làm việc của dây chuyền** (ca kíp, ngày lễ, tăng ca)
 - **Tồn kho & linh kiện** (tồn kho thành phẩm, tồn kho NVL, lịch nhập hàng)
@@ -48,7 +48,17 @@ khách hàng** (`Customer.transit_lead_time_mode`): `calendar_days` (mặc đị
 tính cả cuối tuần/lễ) hoặc `working_days` (bỏ qua ngày không làm việc theo
 `PlanningDataset.logistics_calendar`, mặc định T2-T7 nếu không khai báo).
 
-Chi tiết thuật toán & các giả định đơn giản hoá: xem [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+**Về MTO/MTS**: mỗi sản phẩm chọn 1 trong 2 chiến lược qua
+`Product.planning_strategy`:
+- **Make-to-Order (MTO, mặc định)**: mỗi PO/kỳ Forecast sinh 1 lệnh sản xuất
+  riêng như mô tả ở trên.
+- **Make-to-Stock (MTS)**: PO/Forecast KHÔNG sinh lệnh riêng - chỉ là sự
+  kiện tiêu thụ tồn kho. Hệ thống mô phỏng tồn kho dự kiến theo thời gian và
+  tự sinh lệnh **bổ sung tồn kho** mỗi khi chạm `reorder_point`, đủ số lượng
+  đưa tồn kho về `target_stock_level`. Lệnh bổ sung này đi qua đúng scheduler
+  như PO thường (cùng ràng buộc mềm, cạnh tranh NVL/dây chuyền theo độ ưu
+  tiên). Xem ví dụ `P-STOOL` trong dữ liệu mẫu và chi tiết thuật toán ở mục 3
+  của [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 Chi tiết thuật toán & các giả định đơn giản hoá: xem [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
@@ -65,9 +75,10 @@ pip install -e ".[dev]"
 python examples/run_demo.py
 ```
 
-Dữ liệu mẫu ở `data/sample/factory_demo.json`: 2 sản phẩm (ghế, bàn nhựa)
-dùng chung linh kiện, 3 dây chuyền (2 dây chuyền ép nhựa dùng chung 1 tổ nhân
-lực, 1 dây chuyền lắp ráp riêng), 4 đơn hàng + 2 dòng dự báo.
+Dữ liệu mẫu ở `data/sample/factory_demo.json`: 3 sản phẩm dùng chung linh
+kiện - ghế & bàn nhựa (MTO) và ghế đẩu nhựa (MTS, minh hoạ lệnh bổ sung tồn
+kho tự sinh), 3 dây chuyền (2 dây chuyền ép nhựa dùng chung 1 tổ nhân lực, 1
+dây chuyền lắp ráp riêng), 4 PO + 3 dòng dự báo.
 
 ## Chạy API
 
@@ -92,7 +103,8 @@ src/planning_solver/
                 ProductionLine, WorkCalendar, WorkforcePool, SalesOrder,
                 ForecastEntry, PlanningDataset...
   calendar.py   Nén thời gian làm việc của từng dây chuyền thành slot liên tục
-  demand.py     Gộp PO + Forecast, trừ tồn kho thành phẩm, tránh đếm trùng
+  demand.py     Gộp PO + Forecast -> DemandLine (nhánh MTO: 1-1; nhánh MTS:
+                mô phỏng tồn kho -> lệnh bổ sung theo reorder point)
   mrp.py        Nổ BOM, phân bổ tồn kho/linh kiện theo ưu tiên -> ETA
   scheduler.py  CP-SAT: xếp lịch dây chuyền + nhân lực + hạn giao
   eta_etd.py    Tính ETD, so sánh due date, gộp thành PlanReport
