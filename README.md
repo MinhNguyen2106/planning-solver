@@ -60,6 +60,15 @@ tính cả cuối tuần/lễ) hoặc `working_days` (bỏ qua ngày không làm
   tiên). Xem ví dụ `P-STOOL` trong dữ liệu mẫu và chi tiết thuật toán ở mục 3
   của [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
+**Về chia lot**: số lượng ròng của MỖI PO/Forecast/lệnh bổ sung tồn kho
+KHÔNG bị làm tròn thành 1 con số - nó được **chia thành nhiều lot sản xuất**
+theo `Product.lot_size_multiple` (size chuẩn), mỗi lot là 1 lệnh sản xuất
+độc lập (có thể chạy dây chuyền/thời điểm khác nhau), cùng chung hạn giao.
+Lot dư cuối cùng giữ nguyên số lẻ, không làm tròn lên/xuống - trừ khi dư quá
+nhỏ so với `min_lot_size` thì gộp vào lot liền trước. Không cấu hình
+(`lot_size_multiple=None`, mặc định) = không chia. Chi tiết & ví dụ ở mục 4
+của [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+
 Chi tiết thuật toán & các giả định đơn giản hoá: xem [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 ## Cài đặt
@@ -77,8 +86,10 @@ python examples/run_demo.py
 
 Dữ liệu mẫu ở `data/sample/factory_demo.json`: 3 sản phẩm dùng chung linh
 kiện - ghế & bàn nhựa (MTO) và ghế đẩu nhựa (MTS, minh hoạ lệnh bổ sung tồn
-kho tự sinh), 3 dây chuyền (2 dây chuyền ép nhựa dùng chung 1 tổ nhân lực, 1
-dây chuyền lắp ráp riêng), 4 PO + 3 dòng dự báo.
+kho tự sinh), mỗi sản phẩm đều cấu hình `lot_size_multiple` nên PO/Forecast
+sẽ bị chia thành nhiều lot khi in ra (vd. PO 1100 cái chia 3 lot: 400+400+300),
+3 dây chuyền (2 dây chuyền ép nhựa dùng chung 1 tổ nhân lực, 1 dây chuyền
+lắp ráp riêng), 4 PO + 3 dòng dự báo.
 
 ## Chạy API
 

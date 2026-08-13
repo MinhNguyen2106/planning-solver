@@ -64,7 +64,7 @@ thẳng theo ngày lịch.
 `DemandLine.due_date` = ETD mục tiêu này (PO) hoặc `period_end` (Forecast).
 Đây là mục tiêu cho scheduler: **số lượng hàng phải hoàn thành sản xuất
 (+ buffer QC/đóng gói) trước ETD mục tiêu** — cụ thể là ràng buộc **MỀM**
-(xem mục 6): scheduler luôn cố xếp lịch cho mọi đơn khả thi (đủ NVL, có dây
+(xem mục 8): scheduler luôn cố xếp lịch cho mọi đơn khả thi (đủ NVL, có dây
 chuyền), tối thiểu hoá tổng số giờ trễ so với ETD mục tiêu theo trọng số ưu
 tiên, thay vì loại hẳn đơn ra khỏi kế hoạch nếu không kịp — vì trong thực tế
 kế hoạch viên vẫn cần thấy TOÀN BỘ đơn (kể cả đơn trễ) để biết mà xử lý
@@ -127,12 +127,12 @@ với mỗi sự kiện tiêu thụ (theo thời gian tăng dần):
 
 Đây chính là phương pháp reorder-point/up-to-level (chính sách `(s, S)`) kinh
 điển trong quản lý tồn kho, dùng chung kỹ thuật "đường cung tích luỹ theo thời
-gian" như MRP linh kiện ở mục 6 — chỉ khác là áp dụng cho TỒN KHO THÀNH PHẨM
+gian" như MRP linh kiện ở mục 7 — chỉ khác là áp dụng cho TỒN KHO THÀNH PHẨM
 thay vì linh kiện đầu vào.
 
 `DemandLine` sinh ra từ nhánh MTS có `due_date` = "hạn phải có hàng bổ sung"
 và đi qua **CHÍNH XÁC CÙNG một scheduler** như đơn MTO (cùng là ràng buộc MỀM,
-mục 7) — nghĩa là lệnh bổ sung tồn kho cạnh tranh sòng phẳng về nguyên vật
+mục 8) — nghĩa là lệnh bổ sung tồn kho cạnh tranh sòng phẳng về nguyên vật
 liệu và dây chuyền với các PO khác theo đúng độ ưu tiên, không có đối xử đặc
 biệt. Ví dụ trong `data/sample/factory_demo.json`: `P-STOOL` (MTS) có tồn
 kho ban đầu dưới `reorder_point` nên cần bổ sung ngay, nhưng vì linh kiện
@@ -141,7 +141,59 @@ bổ sung này phải đợi đến lô nhập linh kiện tiếp theo mới có
 kết quả là bị trễ so với hạn "bổ sung ngay", đúng như hành vi mong đợi của
 ràng buộc mềm.
 
-## 4. Luồng xử lý (pipeline.py)
+## 4. Chia lot sản xuất (`Product.split_into_lots`, `demand.split_into_demand_lines`)
+
+Số lượng ròng cuối cùng của MỘT PO/Forecast/lệnh bổ sung tồn kho (mục 1-3)
+**KHÔNG được làm tròn thành 1 con số duy nhất** - nó được **CHIA thành nhiều
+lot sản xuất** (nhiều `DemandLine`), mỗi lot đi qua scheduler NHƯ MỘT LỆNH
+SẢN XUẤT ĐỘC LẬP (có thể chạy trên dây chuyền khác nhau, thời điểm khác
+nhau). Đây là hành vi thực tế của một nhà máy: một đơn 1100 cái không chạy
+liền một mạch 1100 cái, mà chia thành nhiều lô đúc/ép theo khuôn, theo pallet
+đóng gói, v.v.
+
+Cấu hình trên `Product`:
+
+| Field | Ý nghĩa |
+|---|---|
+| `lot_size_multiple` | Size CHUẨN của 1 lot. `None` (mặc định) = KHÔNG chia, cả nhu cầu là 1 lot duy nhất |
+| `min_lot_size` | Ngưỡng gộp: nếu lot dư cuối < giá trị này, gộp vào lot liền trước thay vì đứng riêng. **Bắt buộc khai báo cùng `lot_size_multiple`** (validate ở `Product`) — cả hai cùng `None` hoặc cùng có giá trị, và `min_lot_size <= lot_size_multiple` |
+
+Thuật toán `Product.split_into_lots(qty)`:
+
+```
+nếu lot_size_multiple = None: trả về [qty]                          # không chia
+n_full = số lot ĐẦY ĐỦ = floor(qty / lot_size_multiple)
+dư = qty - n_full × lot_size_multiple
+
+nếu dư == 0:            trả về [lot_size_multiple] × n_full          # chia hết, không lot lẻ
+nếu dư < min_lot_size và n_full > 0:
+                         trả về [lot_size_multiple]×(n_full-1) + [lot_size_multiple + dư]
+                         # gộp phần dư vào lot cuối (lot cuối > size chuẩn)
+ngược lại:               trả về [lot_size_multiple]×n_full + [dư]
+                         # dư đủ lớn (hoặc không có lot nào để gộp vào) -> đứng riêng, GIỮ NGUYÊN
+```
+
+**Điểm mấu chốt: KHÔNG bao giờ làm tròn LÊN hay XUỐNG.** Tổng các lot trả về
+luôn bằng đúng `qty` đưa vào — khác hẳn hành vi "làm tròn lên bội số gần
+nhất" ở các phiên bản trước. Ví dụ: `qty=101, lot_size_multiple=50,
+min_lot_size=50` → `[50, 51]` (không phải `150`); `qty=5` (nhỏ hơn cả 1 lot
+chuẩn) → `[5]` (không phải `50`).
+
+`demand.split_into_demand_lines()` bọc kết quả trên thành các `DemandLine`
+riêng biệt: tất cả lot con của CÙNG một PO/Forecast/lệnh bổ sung dùng
+**CHUNG 1 `due_date`** (ETD mục tiêu gốc - mọi lot đều phải xong trước cùng
+1 hạn, vì bản chất vẫn là 1 đơn hàng, chỉ chia nhỏ để sản xuất song song/nối
+tiếp) và **CHUNG `ref_id`** (truy vết về đúng 1 PO/Forecast/lệnh bổ sung gốc
+dù có bao nhiêu lot), chỉ khác nhau `id` (hậu tố `-L{n}`, vd `SO-SO-1001-L1`,
+`SO-SO-1001-L2`, ...) và `qty`. Áp dụng thống nhất cho cả 3 nguồn: PO
+(MTO), Forecast (MTO), và lệnh bổ sung tồn kho (MTS).
+
+Ví dụ trong `data/sample/factory_demo.json`: `P-CHAIR` có
+`lot_size_multiple=400` → PO `SO-1001` (net 1100 cái) chia thành 3 lot:
+400 + 400 + 300, cả 3 cùng hạn giao, có thể được scheduler xếp trên các dây
+chuyền/thời điểm khác nhau để rút ngắn thời gian hoàn thành tổng thể.
+
+## 5. Luồng xử lý (pipeline.py)
 
 ```
 demand.build_demand_lines()
@@ -168,7 +220,7 @@ eta_etd.build_plan_report()
   -> PlanReport
 ```
 
-## 5. Mô hình lịch làm việc (calendar.py) — "trục thời gian nén"
+## 6. Mô hình lịch làm việc (calendar.py) — "trục thời gian nén"
 
 Mỗi dây chuyền có lịch làm việc riêng (ca kíp theo tuần + ngoại lệ theo
 ngày: nghỉ lễ / tăng ca). Thay vì lập lịch trên trục thời gian thực (dễ phải
@@ -184,7 +236,7 @@ xét bằng số slot làm việc *trước* thời điểm đó — hàm đơn 
 việc so sánh "hoàn thành trước/sau hạn" vẫn đúng dù `due_date` rơi đúng vào
 giờ nghỉ.
 
-## 6. MRP — phân bổ tồn kho/linh kiện theo thứ tự ưu tiên (mrp.py)
+## 7. MRP — phân bổ tồn kho/linh kiện theo thứ tự ưu tiên (mrp.py)
 
 Với mỗi linh kiện, dựng "đường cung tích luỹ":
 
@@ -207,7 +259,7 @@ cung trong toàn bộ các lô đã biết, đơn bị đánh dấu `blocked` k�
 thiếu hụt để bộ phận mua hàng xử lý — các đơn này **không** được đưa vào
 scheduler (không thể lập lịch sản xuất khi chưa biết bao giờ có NVL).
 
-## 7. Scheduler — CP-SAT (scheduler.py)
+## 8. Scheduler — CP-SAT (scheduler.py)
 
 Biến quyết định: với mỗi cặp (đơn, dây chuyền đủ điều kiện) khả thi trong
 horizon, có `assigned` (bool) + `start`/`end` (interval trên trục nén của
@@ -221,31 +273,40 @@ Ràng buộc:
 | Dây chuyền chạy 1 lệnh/lúc, đúng giờ làm việc | `AddNoOverlap` trên interval (trục đã nén theo lịch riêng từng line) |
 | Không sản xuất trước khi có NVL | domain của `start` bắt đầu từ slot sớm nhất ≥ ETA |
 | Nhân lực dùng chung nhiều dây chuyền | `AddCumulative` gộp interval của các line cùng tổ **nếu các line đó có lịch làm việc giống hệt nhau** (cùng toạ độ trục nén) |
-| Ưu tiên đơn gấp/quan trọng, **ETD mục tiêu là ràng buộc MỀM** | mục tiêu tối thiểu hoá **tổng trễ hạn có trọng số** so với `due_date` (= ETD mục tiêu, mục 2) theo priority (HIGH=100, NORMAL=10, LOW=1). Đơn không kịp ETD mục tiêu vẫn được xếp lịch (trễ), KHÔNG bị loại khỏi kế hoạch — chỉ những đơn thiếu NVL (xem mục 6) hoặc hết chỗ trong horizon lập kế hoạch mới bị loại (`unscheduled`). |
+| Ưu tiên đơn gấp/quan trọng, **ETD mục tiêu là ràng buộc MỀM** | mục tiêu tối thiểu hoá **tổng trễ hạn có trọng số** so với `due_date` (= ETD mục tiêu, mục 2) theo priority (HIGH=100, NORMAL=10, LOW=1). Đơn không kịp ETD mục tiêu vẫn được xếp lịch (trễ), KHÔNG bị loại khỏi kế hoạch — chỉ những đơn thiếu NVL (xem mục 7) hoặc hết chỗ trong horizon lập kế hoạch mới bị loại (`unscheduled`). |
 
-## 8. ETA / ETD — tổng hợp lại 3 mốc trong `PlanLine` (eta_etd.py)
+## 9. ETA / ETD — tổng hợp lại 3 mốc trong `PlanLine` (eta_etd.py)
 
 `eta_etd.build_plan_report()` gộp 3 mốc thời gian (đã giải thích ở mục 2)
 thành từng dòng `PlanLine`:
 
-- `eta`: **ETA nguyên vật liệu** — đầu ra của MRP (mục 6), khi nào đủ NVL để
+- `eta`: **ETA nguyên vật liệu** — đầu ra của MRP (mục 7), khi nào đủ NVL để
   bắt đầu sản xuất đơn này.
 - `etd`: **ETD hệ thống tính** = thời điểm sản xuất hoàn thành (đầu ra
-  scheduler, mục 7) + thời gian QC/đóng gói (`Product.post_production_buffer_hours`).
+  scheduler, mục 8) + thời gian QC/đóng gói (`Product.post_production_buffer_hours`).
 - `due_date`: **ETD mục tiêu** — quy đổi từ `SalesOrder.requested_eta`/
   `requested_etd` (PO) hoặc `period_end` (Forecast), xem mục 2.
 - `on_time = (etd <= due_date)`, `delay_hours = max(0, etd − due_date)`.
 
-## 9. Giới hạn & hướng mở rộng (v1)
+## 10. Giới hạn & hướng mở rộng (v1)
 
 Đây là một MVP có kiến trúc đúng đắn cho bài toán thật, nhưng có vài đơn giản
 hoá được ghi nhận rõ ràng để dễ mở rộng:
 
-1. **Không chia nhỏ lô** — mỗi `DemandLine` chạy trọn vẹn trên 1 dây chuyền.
-   Muốn chia lô song song nhiều dây chuyền: tách `DemandLine` thành nhiều
-   sub-lot trước khi đưa vào scheduler (demand.py), hoặc mở rộng scheduler
-   cho phép `assigned` > 1 dây chuyền với biến `qty_on_line`.
-2. **Nhân lực dùng chung khác lịch làm việc** — nếu các dây chuyền trong
+1. **Mỗi LOT (sau khi đã chia theo mục 4) vẫn chạy trọn vẹn trên 1 dây
+   chuyền** — không hỗ trợ chia tiếp MỘT lot ra nhiều dây chuyền chạy song
+   song. Đã đạt hiệu ứng "chia nhỏ để chạy song song" ở mức PO/Forecast
+   thông qua `lot_size_multiple` (nhiều lot, mỗi lot tự do được rải trên
+   dây chuyền khác nhau) — nhưng đó là do NGƯỜI DÙNG chọn trước kích thước
+   lot cố định, không phải solver tự động chia động theo tải hiện tại của
+   từng dây chuyền.
+2. **Kích thước lot ảnh hưởng trực tiếp đến độ lớn mô hình CP-SAT** —
+   `lot_size_multiple` càng nhỏ, số `DemandLine` (biến quyết định trong
+   solver) càng nhiều. Với đơn hàng lớn + lot nhỏ (vd. PO 10.000 cái, lot
+   50 cái → 200 lot), thời gian giải có thể tăng đáng kể; cân nhắc đặt
+   `lot_size_multiple` đủ lớn để phản ánh đúng quy mô lô sản xuất thực tế
+   (khuôn/pallet/ca máy), không nên đặt quá nhỏ chỉ để "chia mịn".
+3. **Nhân lực dùng chung khác lịch làm việc** — nếu các dây chuyền trong
    cùng tổ nhân lực có lịch làm việc KHÁC NHAU, hệ thống chỉ cảnh báo
    (`workforce_warnings`) chứ chưa enforce ràng buộc cứng (vì 2 trục nén khác
    nhau không thể gộp trực tiếp vào 1 `Cumulative`). Hướng mở rộng: dựng một
@@ -253,24 +314,24 @@ hoá được ghi nhận rõ ràng để dễ mở rộng:
    thành các đoạn theo từng ca thực tế (segmentation), rồi cộng dồn nhân lực
    theo ngày/ca trên trục chủ đó — đúng như cách các hệ APS thương mại
    (SAP PP/DS, Preactor…) xử lý.
-3. **Changeover đơn giản hoá** — thời gian chuyển đổi (`changeover_minutes`)
+4. **Changeover đơn giản hoá** — thời gian chuyển đổi (`changeover_minutes`)
    được cộng cố định vào mọi lệnh, chưa phụ thuộc vào sản phẩm chạy TRƯỚC đó
    trên cùng dây chuyền (sequence-dependent changeover). Có thể mở rộng bằng
    `AddCircuit`/`ArcCost` theo cặp sản phẩm liên tiếp.
-4. **BOM 1 cấp** — chưa hỗ trợ bán thành phẩm (linh kiện được sản xuất nội bộ
+5. **BOM 1 cấp** — chưa hỗ trợ bán thành phẩm (linh kiện được sản xuất nội bộ
    từ linh kiện khác, đa cấp). Có thể mở rộng bằng cách đệ quy `mrp.py`.
-5. **Không có persistence** — dữ liệu đọc/ghi qua JSON (`io_utils.py`). Cho
+6. **Không có persistence** — dữ liệu đọc/ghi qua JSON (`io_utils.py`). Cho
    production thật nên chuyển sang DB (Postgres) + migration, và API cần auth.
-6. **Không có UI trực quan (Gantt)** — `PlanReport` hiện là dữ liệu thô; có
+7. **Không có UI trực quan (Gantt)** — `PlanReport` hiện là dữ liệu thô; có
    thể build thêm dashboard (vd. React + timeline chart) đọc từ `/plan/run`.
-7. **Transit lead time ở cấp khách hàng, chưa phải tuyến/phương thức vận
+8. **Transit lead time ở cấp khách hàng, chưa phải tuyến/phương thức vận
    chuyển** — `Customer.transit_lead_time_days` là MỘT con số cố định cho
    mỗi khách hàng. Nếu một khách có nhiều kho nhận hàng/nhiều phương thức
    vận chuyển (đường bộ nhanh vs. đường biển chậm) với lead time khác nhau,
    cần tách thành entity `ShippingLane` riêng (khách hàng × phương thức/kho
    nhận → lead time), PO tham chiếu `shipping_lane_id` thay vì `customer_id`
    trực tiếp.
-8. **Mô phỏng tồn kho MTS (mục 3) là ĐIỂM (point simulation), không phải MRP
+9. **Mô phỏng tồn kho MTS (mục 3) là ĐIỂM (point simulation), không phải MRP
    time-phased đầy đủ** — bỏ qua các lệnh bổ sung ĐÃ ĐANG SẢN XUẤT (open
    replenishment orders chưa hoàn thành) khi tính tồn kho dự kiến ở lần chạy
    kế hoạch tiếp theo; mỗi lần `run_planning()` chạy lại từ đầu dựa trên
@@ -280,7 +341,7 @@ hoá được ghi nhận rõ ràng để dễ mở rộng:
    tục trong ngày. Hướng mở rộng: thêm khái niệm "lệnh sản xuất đang mở"
    (open production order, có qty + expected completion date) như một nguồn
    cung bổ sung trong mô phỏng, tương tự `Component.incoming_receipts`.
-9. **1 chính sách tồn kho duy nhất cho mỗi sản phẩm MTS** — không hỗ trợ
+10. **1 chính sách tồn kho duy nhất cho mỗi sản phẩm MTS** — không hỗ trợ
    tồn kho mục tiêu thay đổi theo mùa vụ (vd. tăng target_stock_level trước
    mùa cao điểm). Có thể mở rộng bằng cách cho `reorder_point`/
    `target_stock_level` biến thiên theo khoảng thời gian thay vì hằng số.

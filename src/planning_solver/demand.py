@@ -37,8 +37,17 @@ Quy tắc netting chung (tránh đếm trùng nhu cầu):
     lượng SalesOrder rơi vào đúng giai đoạn đó của cùng sản phẩm - phần dự
     báo đã được PO "hiện thực hoá" thì không tính thêm nữa.
     forecast_còn_lại = max(0, forecast_qty - tổng PO cùng sản phẩm trong kỳ)
-  - Số lượng cuối cùng được làm tròn theo min_lot_size / lot_size_multiple
-    của sản phẩm.
+
+Chia lot sản xuất (split_into_demand_lines):
+  Số lượng ròng cuối cùng của MỖI PO/Forecast/lệnh bổ sung KHÔNG được làm
+  tròn thành 1 con số duy nhất - nó được CHIA thành nhiều DemandLine (nhiều
+  lot sản xuất) theo `Product.split_into_lots()` (xem models.py): các lot
+  đầy đủ bằng `lot_size_multiple`, phần dư giữ nguyên thành 1 lot riêng (trừ
+  khi dư quá nhỏ so với `min_lot_size` thì gộp vào lot cuối). Mọi lot con
+  của cùng 1 PO/Forecast/lệnh bổ sung dùng CHUNG 1 due_date (ETD mục tiêu/
+  hạn bổ sung gốc) và chung `ref_id` (để truy vết về nguồn), chỉ khác nhau
+  ở `id` (có hậu tố `-L{n}`) và `qty`. Nếu sản phẩm không khai báo
+  `lot_size_multiple` (None), không chia gì cả - đúng 1 DemandLine như cũ.
 """
 from __future__ import annotations
 
@@ -123,6 +132,37 @@ def _apply_finished_goods(
     return result
 
 
+def split_into_demand_lines(
+    id_prefix: str,
+    product_id: str,
+    product: Product | None,
+    qty: float,
+    due_date: datetime,
+    priority: OrderPriority,
+    source: DemandSource,
+    ref_id: str,
+) -> list[DemandLine]:
+    """Chia `qty` thành các lot sản xuất theo `product.split_into_lots()`
+    (hoặc giữ nguyên 1 lot nếu không có Product đăng ký - product_id lạ vẫn
+    được xử lý an toàn) và bọc mỗi lot thành 1 DemandLine riêng - tất cả
+    dùng CHUNG `due_date`/`priority`/`source`/`ref_id` (đều thuộc cùng một
+    PO/Forecast/lệnh bổ sung gốc), chỉ khác `id` (hậu tố `-L{n}`, n bắt đầu
+    từ 1) và `qty`. Trả về [] nếu `qty <= 0`."""
+    lots = product.split_into_lots(qty) if product is not None else ([qty] if qty > 0 else [])
+    return [
+        DemandLine(
+            id=f"{id_prefix}-L{i}",
+            product_id=product_id,
+            qty=lot_qty,
+            due_date=due_date,
+            priority=priority,
+            source=source,
+            ref_id=ref_id,
+        )
+        for i, lot_qty in enumerate(lots, start=1)
+    ]
+
+
 def build_mts_replenishment_lines(
     product: Product,
     sales_orders: list[SalesOrder],
@@ -164,14 +204,15 @@ def build_mts_replenishment_lines(
 
     def trigger(at: datetime) -> None:
         nonlocal stock, seq
-        qty = product.round_up_lot(product.target_stock_level - stock)
+        qty = product.target_stock_level - stock
         if qty <= 0:
             return
         seq += 1
-        lines.append(
-            DemandLine(
-                id=f"MTS-{product.id}-{seq}",
+        lines.extend(
+            split_into_demand_lines(
+                id_prefix=f"MTS-{product.id}-{seq}",
                 product_id=product.id,
+                product=product,
                 qty=qty,
                 due_date=at,
                 priority=product.replenishment_priority,
@@ -225,13 +266,12 @@ def build_demand_lines(dataset: PlanningDataset, reference_start: datetime) -> l
     for so, qty in so_net:
         if qty <= 0:
             continue
-        product = products.get(so.product_id)
-        final_qty = product.round_up_lot(qty) if product else qty
-        demand_lines.append(
-            DemandLine(
-                id=f"SO-{so.id}",
+        demand_lines.extend(
+            split_into_demand_lines(
+                id_prefix=f"SO-{so.id}",
                 product_id=so.product_id,
-                qty=final_qty,
+                product=products.get(so.product_id),
+                qty=qty,
                 due_date=etd_by_so[so.id],
                 priority=so.priority,
                 source=DemandSource.SALES_ORDER,
@@ -246,13 +286,12 @@ def build_demand_lines(dataset: PlanningDataset, reference_start: datetime) -> l
         )
         if remaining_forecast <= 0:
             continue
-        product = products.get(fc.product_id)
-        final_qty = product.round_up_lot(remaining_forecast) if product else remaining_forecast
-        demand_lines.append(
-            DemandLine(
-                id=f"FC-{fc.id}",
+        demand_lines.extend(
+            split_into_demand_lines(
+                id_prefix=f"FC-{fc.id}",
                 product_id=fc.product_id,
-                qty=final_qty,
+                product=products.get(fc.product_id),
+                qty=remaining_forecast,
                 due_date=fc.period_end,
                 priority=OrderPriority.LOW,
                 source=DemandSource.FORECAST,

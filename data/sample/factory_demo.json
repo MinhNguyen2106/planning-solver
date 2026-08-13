@@ -15,8 +15,8 @@
         {"component_id": "C-LEG", "qty_per_unit": 4, "scrap_rate": 0.02},
         {"component_id": "C-BOLT", "qty_per_unit": 8, "scrap_rate": 0.05}
       ],
-      "min_lot_size": 50,
-      "lot_size_multiple": 50,
+      "min_lot_size": 200,
+      "lot_size_multiple": 400,
       "post_production_buffer_hours": 4
     },
     {
@@ -28,8 +28,8 @@
         {"component_id": "C-LEG", "qty_per_unit": 4, "scrap_rate": 0.02},
         {"component_id": "C-BOLT", "qty_per_unit": 12, "scrap_rate": 0.05}
       ],
-      "min_lot_size": 20,
-      "lot_size_multiple": 20,
+      "min_lot_size": 75,
+      "lot_size_multiple": 150,
       "post_production_buffer_hours": 6
     },
     {
@@ -40,8 +40,8 @@
         {"component_id": "C-LEG", "qty_per_unit": 3, "scrap_rate": 0.02},
         {"component_id": "C-BOLT", "qty_per_unit": 6, "scrap_rate": 0.05}
       ],
-      "min_lot_size": 30,
-      "lot_size_multiple": 30,
+      "min_lot_size": 60,
+      "lot_size_multiple": 120,
       "post_production_buffer_hours": 2,
       "planning_strategy": "make_to_stock",
       "reorder_point": 100,

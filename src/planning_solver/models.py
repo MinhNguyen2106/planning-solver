@@ -169,8 +169,27 @@ class Product(BaseModel):
     name: str
     uom: str = "pcs"
     bom: list[BOMItem] = Field(default_factory=list)
-    min_lot_size: float = Field(default=1, gt=0)
-    lot_size_multiple: float = Field(default=1, gt=0)
+    lot_size_multiple: Optional[float] = Field(
+        default=None, gt=0,
+        description=(
+            "Size CHUẨN của 1 lot sản xuất. Nếu khai báo, mỗi PO/Forecast/lệnh "
+            "bổ sung (MTS) được CHIA thành nhiều lot bằng giá trị này (xem "
+            "demand.split_into_demand_lines). None (mặc định) = không chia, "
+            "toàn bộ nhu cầu là 1 lot duy nhất."
+        ),
+    )
+    min_lot_size: Optional[float] = Field(
+        default=None, ge=0,
+        description=(
+            "Ngưỡng gộp lot dư: nếu lot cuối (phần dư sau khi chia hết cho "
+            "lot_size_multiple) NHỎ HƠN giá trị này, gộp phần dư đó vào lot "
+            "liền trước (lot cuối lớn hơn size chuẩn một chút) thay vì đứng "
+            "thành 1 lot riêng quá nhỏ. Không bao giờ làm tròn LÊN - phần dư "
+            "đủ lớn (>= min_lot_size) vẫn đứng riêng ĐÚNG bằng giá trị dư đó. "
+            "Bắt buộc khai báo cùng lot_size_multiple (cả hai cùng None hoặc "
+            "cùng có giá trị)."
+        ),
+    )
     post_production_buffer_hours: float = Field(
         default=0, ge=0, description="Thời gian QC/đóng gói sau khi sản xuất xong trước khi có thể xuất (ETD)"
     )
@@ -201,13 +220,54 @@ class Product(BaseModel):
             )
         return self
 
-    def round_up_lot(self, qty: float) -> float:
-        """Làm tròn số lượng theo min lot size & bội số lô."""
+    @model_validator(mode="after")
+    def _check_lot_fields_consistency(self) -> "Product":
+        has_multiple = self.lot_size_multiple is not None
+        has_min = self.min_lot_size is not None
+        if has_multiple != has_min:
+            raise ValueError(
+                f"Sản phẩm '{self.id}': min_lot_size và lot_size_multiple phải cùng được "
+                "khai báo, hoặc cùng để trống (None = không chia lot)."
+            )
+        if has_multiple and self.min_lot_size > self.lot_size_multiple:
+            raise ValueError(
+                f"Sản phẩm '{self.id}': min_lot_size ({self.min_lot_size}) không được lớn "
+                f"hơn lot_size_multiple ({self.lot_size_multiple}) - nếu không, phần dư sẽ "
+                "LUÔN bị gộp vào lot trước, size chuẩn coi như vô nghĩa."
+            )
+        return self
+
+    def split_into_lots(self, qty: float) -> list[float]:
+        """Chia số lượng nhu cầu ròng `qty` thành các LOT sản xuất.
+
+        - `lot_size_multiple` không khai báo (None): KHÔNG chia, trả về đúng
+          1 lot = toàn bộ `qty` (không làm tròn).
+        - Có khai báo: chia thành các lot đầy đủ = `lot_size_multiple`. Phần
+          dư (nếu có) đứng thành 1 lot riêng ĐÚNG BẰNG phần dư đó (không làm
+          tròn lên/xuống) - TRỪ KHI phần dư nhỏ hơn `min_lot_size`, khi đó
+          phần dư được GỘP vào lot liền trước (lot cuối lớn hơn size chuẩn).
+          Tổng các lot trả về luôn bằng đúng `qty` (bảo toàn số lượng).
+        """
         if qty <= 0:
-            return 0.0
-        qty = max(qty, self.min_lot_size)
-        n = -(-qty // self.lot_size_multiple)  # ceil
-        return n * self.lot_size_multiple
+            return []
+        if self.lot_size_multiple is None:
+            return [qty]
+
+        qty = round(qty, 6)
+        lot = self.lot_size_multiple
+        n_full = int(qty // lot)
+        remainder = round(qty - n_full * lot, 6)
+
+        if remainder == 0:
+            return [lot] * n_full
+
+        min_lot = self.min_lot_size or 0.0
+        if remainder < min_lot and n_full > 0:
+            return [lot] * (n_full - 1) + [lot + remainder]
+        # Phần dư đủ lớn (>= min_lot_size), HOẶC không có lot chuẩn nào để
+        # gộp vào (n_full == 0, toàn bộ qty nhỏ hơn cả 1 lot chuẩn) -> đứng
+        # thành 1 lot riêng, giữ nguyên giá trị dư (không làm tròn).
+        return [lot] * n_full + [remainder]
 
 
 class ProductionLine(BaseModel):

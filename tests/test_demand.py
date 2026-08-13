@@ -165,12 +165,28 @@ def test_forecast_fully_absorbed_by_po_disappears():
     assert all(l.source != DemandSource.FORECAST for l in lines)
 
 
-def test_lot_size_rounding_applied():
+def test_po_is_split_into_multiple_lots_sharing_due_date_and_ref_id():
     p = base_product(min_lot_size=50, lot_size_multiple=50)
+    due = datetime(2026, 2, 5)
+    so = so_etd("SO1", due, qty=101)
+    ds = PlanningDataset(products=[p], sales_orders=[so])
+    lines = build_demand_lines(ds, reference_start=datetime(2026, 1, 1))
+    # 101 -> [50, 51] (phần dư 1 < min_lot_size 50 nên gộp vào lot cuối,
+    # KHÔNG làm tròn lên 150 như hành vi cũ)
+    assert sorted(l.qty for l in lines) == [50, 51]
+    assert all(l.due_date == due for l in lines)
+    assert all(l.ref_id == "SO1" for l in lines)
+    assert {l.id for l in lines} == {"SO-SO1-L1", "SO-SO1-L2"}
+
+
+def test_po_without_lot_config_stays_as_single_line():
+    p = base_product()  # không cấu hình min_lot_size/lot_size_multiple
     so = so_etd("SO1", datetime(2026, 2, 5), qty=101)
     ds = PlanningDataset(products=[p], sales_orders=[so])
     lines = build_demand_lines(ds, reference_start=datetime(2026, 1, 1))
-    assert lines[0].qty == 150
+    assert len(lines) == 1
+    assert lines[0].qty == 101
+    assert lines[0].id == "SO-SO1-L1"
 
 
 # --- Make-to-Stock (MTS) ---------------------------------------------------
