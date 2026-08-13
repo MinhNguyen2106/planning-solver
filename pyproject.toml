@@ -1,0 +1,26 @@
+[project]
+name = "planning-solver"
+version = "0.1.0"
+description = "Hệ thống lập kế hoạch sản xuất nhà máy: MRP (linh kiện/tồn kho) + APS (lịch dây chuyền, nhân lực) + ETA/ETD từ PO & Forecast"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "ortools>=9.9",
+    "pydantic>=2.6",
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    "pandas>=2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "httpx>=0.27",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
