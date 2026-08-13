@@ -189,6 +189,24 @@ OrderPriority là string Enum (để dữ liệu JSON dễ đọc: "HIGH"/"NORMA
 nên mọi so sánh thứ tự phải tra qua bảng này thay vì dùng .value trực tiếp."""
 
 
+class DateCountMode(str, Enum):
+    """Cách đếm ngày khi cộng/trừ ngày tháng cho ETA/ETD (transit lead time,
+    và mọi phép quy đổi ngày tương tự trong tương lai)."""
+
+    CALENDAR_DAYS = "calendar_days"
+    """Đếm NGÀY LỊCH thông thường - bao gồm cả cuối tuần/ngày lễ (vd. 3 ngày
+    lịch = cộng/trừ thẳng timedelta(days=3), không quan tâm hôm đó có phải
+    ngày nghỉ hay không). Mặc định - đơn giản, khớp cách hiểu "N ngày" phổ
+    biến khi không có yêu cầu đặc biệt."""
+
+    WORKING_DAYS = "working_days"
+    """Đếm NGÀY LÀM VIỆC - bỏ qua ngày không làm việc (cuối tuần + ngày lễ)
+    theo một lịch cụ thể (`PlanningDataset.logistics_calendar`, hoặc lịch
+    mặc định T2-T7 nếu không khai báo). Dùng khi transit lead time được tính
+    theo "ngày làm việc" của hãng vận chuyển/hải quan, vd. "3 ngày làm việc"
+    sẽ tự động cộng thêm cho đủ nếu rơi vào cuối tuần/lễ."""
+
+
 class Customer(BaseModel):
     """Dữ liệu chủ (master data) khách hàng / tuyến giao hàng - dùng để quy
     đổi ETA (hàng đến tay khách) <-> ETD (hàng rời xưởng) cho các PO chỉ khai
@@ -199,7 +217,11 @@ class Customer(BaseModel):
     transit_lead_time_days: float = Field(
         default=0,
         ge=0,
-        description="Thời gian vận chuyển tiêu chuẩn từ xưởng đến khách hàng/tuyến này (ngày)",
+        description="Thời gian vận chuyển tiêu chuẩn từ xưởng đến khách hàng/tuyến này",
+    )
+    transit_lead_time_mode: DateCountMode = Field(
+        default=DateCountMode.CALENDAR_DAYS,
+        description="transit_lead_time_days tính theo ngày lịch hay ngày làm việc - xem DateCountMode",
     )
 
 
@@ -299,6 +321,14 @@ class PlanningDataset(BaseModel):
     sales_orders: list[SalesOrder] = Field(default_factory=list)
     forecasts: list[ForecastEntry] = Field(default_factory=list)
     finished_goods_inventory: list[FinishedGoodsInventory] = Field(default_factory=list)
+    logistics_calendar: Optional[WorkCalendar] = Field(
+        default=None,
+        description=(
+            "Lịch ngày làm việc dùng khi quy đổi ETA/ETD theo NGÀY LÀM VIỆC "
+            "(Customer.transit_lead_time_mode = working_days). Không set thì "
+            "dùng lịch mặc định T2-T7 (calendar.default_business_calendar)."
+        ),
+    )
 
     def product_map(self) -> dict[str, Product]:
         return {p.id: p for p in self.products}

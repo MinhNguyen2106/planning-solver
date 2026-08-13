@@ -15,9 +15,9 @@ from __future__ import annotations
 import bisect
 import math
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 
-from .models import WorkCalendar
+from .models import Shift, WorkCalendar
 
 
 def _day_windows(calendar: WorkCalendar, day: date) -> list[tuple[datetime, datetime]]:
@@ -55,6 +55,66 @@ def working_windows_between(
                 windows.append((cs, ce))
         d += timedelta(days=1)
     return windows
+
+
+def is_working_day(calendar: WorkCalendar, day: date) -> bool:
+    """True nếu `day` có ít nhất 1 ca làm việc theo lịch. Dùng cho các phép
+    tính Ở CẤP ĐỘ NGÀY (không quan tâm giờ giấc cụ thể trong ca) - ví dụ quy
+    đổi ETA/ETD theo "ngày làm việc"."""
+    return len(_day_windows(calendar, day)) > 0
+
+
+def default_business_calendar() -> WorkCalendar:
+    """Lịch ngày làm việc mặc định dùng khi cần tính theo NGÀY LÀM VIỆC (vd.
+    quy đổi ETA/ETD ở demand.py) nhưng không có lịch cụ thể nào được khai báo
+    (`PlanningDataset.logistics_calendar`): Thứ 2 - Thứ 7 là ngày làm việc,
+    không có ngoại lệ ngày lễ. Muốn tính đúng ngày nghỉ lễ thực tế, hãy khai
+    báo `logistics_calendar` tường minh thay vì dùng mặc định này."""
+    return WorkCalendar(
+        shifts=[Shift(name="_business_day", weekdays=[0, 1, 2, 3, 4, 5], start=time(0, 0), end=time(23, 59))]
+    )
+
+
+def shift_by_working_days(
+    dt: datetime, days: float, calendar: WorkCalendar, direction: int = -1
+) -> datetime:
+    """Dịch `dt` đi `days` NGÀY LÀM VIỆC theo `calendar`, bỏ qua ngày không
+    làm việc (cuối tuần theo lịch + ngoại lệ nghỉ lễ/tăng ca).
+
+    `direction=-1` lùi về trước (dùng để quy đổi ETA -> ETD: hàng phải rời
+    xưởng sớm hơn ngày cần đến bao nhiêu NGÀY LÀM VIỆC của bên vận chuyển),
+    `direction=+1` tiến lên (chiều ngược lại, nếu cần trong tương lai).
+
+    Hỗ trợ `days` lẻ (vd 1.5): phần nguyên được lùi/tiến từng NGÀY LÀM VIỆC
+    trọn vẹn, phần lẻ được cộng/trừ thêm như một khoảng thời gian thông
+    thường (không xét ngày nghỉ) - đủ dùng cho lead time thực tế (thường là
+    số ngày nguyên)."""
+    if direction not in (-1, 1):
+        raise ValueError("direction phải là -1 (lùi) hoặc 1 (tiến)")
+
+    whole = int(days)
+    frac = days - whole
+    step = timedelta(days=direction)
+
+    cur = dt
+    remaining = whole
+    while remaining > 0:
+        cur += step
+        if is_working_day(calendar, cur.date()):
+            remaining -= 1
+    if frac:
+        cur += timedelta(days=frac) * direction
+    return cur
+
+
+def subtract_working_days(dt: datetime, days: float, calendar: WorkCalendar) -> datetime:
+    """Lùi `dt` về trước `days` ngày làm việc - xem `shift_by_working_days`."""
+    return shift_by_working_days(dt, days, calendar, direction=-1)
+
+
+def add_working_days(dt: datetime, days: float, calendar: WorkCalendar) -> datetime:
+    """Tiến `dt` lên `days` ngày làm việc - xem `shift_by_working_days`."""
+    return shift_by_working_days(dt, days, calendar, direction=1)
 
 
 @dataclass

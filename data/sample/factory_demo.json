@@ -1,8 +1,8 @@
 {
   "customers": [
-    {"id": "CUST-HP", "name": "Nội thất Hòa Phát", "transit_lead_time_days": 2},
+    {"id": "CUST-HP", "name": "Nội thất Hòa Phát", "transit_lead_time_days": 2, "transit_lead_time_mode": "calendar_days"},
     {"id": "CUST-XANH", "name": "Siêu thị Nội thất Xanh", "transit_lead_time_days": 3},
-    {"id": "CUST-CAFE", "name": "Chuỗi Cafe Việt", "transit_lead_time_days": 1},
+    {"id": "CUST-CAFE", "name": "Chuỗi Cafe Việt", "transit_lead_time_days": 1, "transit_lead_time_mode": "working_days"},
     {"id": "CUST-SCHOOL", "name": "Trường học ABC", "transit_lead_time_days": 4}
   ],
   "products": [

@@ -43,6 +43,13 @@ ra scheduler) là hai mốc hệ thống TỰ TÍNH dựa trên tồn kho/lịch
 so sánh với ETD mục tiêu ở bước (1) để biết đúng hạn hay không. Xem chi tiết,
 kèm ví dụ, ở mục 2 của [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
+Phép quy đổi ETA→ETD ở bước (1) hỗ trợ **2 cách đếm ngày, chọn theo từng
+khách hàng** (`Customer.transit_lead_time_mode`): `calendar_days` (mặc định,
+tính cả cuối tuần/lễ) hoặc `working_days` (bỏ qua ngày không làm việc theo
+`PlanningDataset.logistics_calendar`, mặc định T2-T7 nếu không khai báo).
+
+Chi tiết thuật toán & các giả định đơn giản hoá: xem [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+
 Chi tiết thuật toán & các giả định đơn giản hoá: xem [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 ## Cài đặt

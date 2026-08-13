@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, time
 
 import pytest
 from pydantic import ValidationError
@@ -6,12 +6,15 @@ from pydantic import ValidationError
 from planning_solver.demand import build_demand_lines, commitment_etd
 from planning_solver.models import (
     Customer,
+    DateCountMode,
     DemandSource,
     FinishedGoodsInventory,
     ForecastEntry,
     PlanningDataset,
     Product,
     SalesOrder,
+    Shift,
+    WorkCalendar,
 )
 
 
@@ -38,6 +41,58 @@ def test_requested_eta_converted_using_customer_transit_lead_time():
     )
     customers = {"CUST-A": Customer(id="CUST-A", name="A", transit_lead_time_days=3)}
     assert commitment_etd(so, customers) == datetime(2026, 2, 7)
+
+
+def test_requested_eta_converted_using_calendar_days_ignores_weekend():
+    # 2026-02-10 là Thứ 3. Trừ 3 NGÀY LỊCH -> 2026-02-07 (Thứ 7), không quan
+    # tâm hôm đó là cuối tuần.
+    so = SalesOrder(
+        id="SO1", customer_id="CUST-A", product_id="P1", qty=100,
+        order_date=datetime(2026, 1, 1), requested_eta=datetime(2026, 2, 10),
+    )
+    customers = {
+        "CUST-A": Customer(
+            id="CUST-A", name="A", transit_lead_time_days=3,
+            transit_lead_time_mode=DateCountMode.CALENDAR_DAYS,
+        )
+    }
+    assert commitment_etd(so, customers) == datetime(2026, 2, 7)
+
+
+def test_requested_eta_converted_using_working_days_skips_weekend():
+    # 2026-02-10 là Thứ 3. Trừ 3 NGÀY LÀM VIỆC (lịch mặc định T2-T7) phải
+    # nhảy qua cuối tuần liền trước -> kết quả 2026-02-06 (Thứ 6), không
+    # phải 2026-02-07 như calendar_days.
+    so = SalesOrder(
+        id="SO1", customer_id="CUST-A", product_id="P1", qty=100,
+        order_date=datetime(2026, 1, 1), requested_eta=datetime(2026, 2, 10),
+    )
+    customers = {
+        "CUST-A": Customer(
+            id="CUST-A", name="A", transit_lead_time_days=3,
+            transit_lead_time_mode=DateCountMode.WORKING_DAYS,
+        )
+    }
+    assert commitment_etd(so, customers) == datetime(2026, 2, 6)
+
+
+def test_working_days_mode_uses_explicit_logistics_calendar_when_given():
+    # Lịch riêng chỉ làm việc Thứ 4 -> lùi 1 ngày làm việc từ Thứ 3 10/2 phải
+    # nhảy về tận Thứ 4 tuần trước (2026-02-04).
+    so = SalesOrder(
+        id="SO1", customer_id="CUST-A", product_id="P1", qty=100,
+        order_date=datetime(2026, 1, 1), requested_eta=datetime(2026, 2, 10),
+    )
+    customers = {
+        "CUST-A": Customer(
+            id="CUST-A", name="A", transit_lead_time_days=1,
+            transit_lead_time_mode=DateCountMode.WORKING_DAYS,
+        )
+    }
+    only_wednesday = WorkCalendar(
+        shifts=[Shift(name="W", weekdays=[2], start=time(0, 0), end=time(23, 59))]
+    )
+    assert commitment_etd(so, customers, only_wednesday) == datetime(2026, 2, 4)
 
 
 def test_requested_etd_takes_precedence_over_eta():

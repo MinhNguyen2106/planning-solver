@@ -6,6 +6,14 @@ Quy đổi cam kết giao hàng của PO ra ETD (commitment_etd):
     - `requested_etd` (hàng RỜI XƯỞNG) -> dùng thẳng.
     - `requested_eta` (hàng ĐẾN TAY khách) -> trừ đi `transit_lead_time_days`
       tra từ `Customer` (master data khách hàng/tuyến giao hàng) để ra ETD.
+      Phép trừ này có THỂ CHỌN 1 trong 2 cách đếm ngày, theo
+      `Customer.transit_lead_time_mode` (xem models.DateCountMode):
+        - `calendar_days` (mặc định): trừ thẳng theo ngày lịch, tính cả
+          cuối tuần/ngày lễ.
+        - `working_days`: trừ theo NGÀY LÀM VIỆC, bỏ qua ngày không làm
+          việc (cuối tuần + ngày lễ) theo `PlanningDataset.logistics_calendar`
+          (hoặc lịch mặc định T2-T7 nếu không khai báo) - xem
+          `calendar.subtract_working_days`.
   ETD này chính là `DemandLine.due_date` - mục tiêu MỀM mà sản xuất phải
   hoàn thành hàng trước đó (đưa vào hàm mục tiêu của scheduler, không phải
   ràng buộc cứng loại đơn khỏi kế hoạch).
@@ -29,26 +37,43 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
+from .calendar import default_business_calendar, subtract_working_days
 from .models import (
     PRIORITY_RANK,
     Customer,
+    DateCountMode,
     DemandLine,
     DemandSource,
     OrderPriority,
     PlanningDataset,
     SalesOrder,
+    WorkCalendar,
 )
 
 
-def commitment_etd(so: SalesOrder, customers: dict[str, Customer]) -> datetime:
+def commitment_etd(
+    so: SalesOrder,
+    customers: dict[str, Customer],
+    logistics_calendar: WorkCalendar | None = None,
+) -> datetime:
     """Quy đổi cam kết giao hàng của một PO ra ETD tại xưởng (thời điểm sản
-    xuất phải hoàn thành hàng để kịp giao)."""
+    xuất phải hoàn thành hàng để kịp giao). `logistics_calendar` chỉ được
+    dùng khi khách hàng có `transit_lead_time_mode = working_days`; nếu
+    không truyền, dùng lịch mặc định T2-T7 (`default_business_calendar`)."""
     if so.requested_etd is not None:
         return so.requested_etd
+
     customer = customers.get(so.customer_id)
     lead_days = customer.transit_lead_time_days if customer else 0.0
+    mode = customer.transit_lead_time_mode if customer else DateCountMode.CALENDAR_DAYS
     # so.requested_eta chắc chắn khác None ở đây (đã validate ở SalesOrder).
-    return so.requested_eta - timedelta(days=lead_days)  # type: ignore[operator]
+    eta = so.requested_eta
+    assert eta is not None
+
+    if mode == DateCountMode.WORKING_DAYS:
+        calendar = logistics_calendar or default_business_calendar()
+        return subtract_working_days(eta, lead_days, calendar)
+    return eta - timedelta(days=lead_days)
 
 
 def _apply_finished_goods(
@@ -77,7 +102,10 @@ def build_demand_lines(dataset: PlanningDataset) -> list[DemandLine]:
     customers = dataset.customer_map()
     fg_on_hand = {i.product_id: i.on_hand_qty for i in dataset.finished_goods_inventory}
 
-    etd_by_so = {so.id: commitment_etd(so, customers) for so in dataset.sales_orders}
+    etd_by_so = {
+        so.id: commitment_etd(so, customers, dataset.logistics_calendar)
+        for so in dataset.sales_orders
+    }
 
     demand_lines: list[DemandLine] = []
 

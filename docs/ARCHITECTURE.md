@@ -42,6 +42,25 @@ nếu PO chỉ có requested_eta:        ETD mục tiêu = requested_eta − tra
 hàng) — mỗi PO chỉ tham chiếu `customer_id`, không tự khai báo lead time
 riêng, để chuẩn hoá dữ liệu vận chuyển tập trung một chỗ.
 
+**Phép trừ ngày ở trên có 2 cách tính, chọn qua `Customer.transit_lead_time_mode`
+(`DateCountMode`)** — vì "3 ngày" có thể hiểu là 3 ngày lịch hoặc 3 ngày làm
+việc của bên vận chuyển/hải quan, và hai cách hiểu cho kết quả khác nhau bất
+cứ khi nào lead time "vắt" qua cuối tuần/ngày lễ:
+
+| Mode | Cách tính | Khi nào dùng |
+|---|---|---|
+| `calendar_days` (mặc định) | Trừ thẳng `timedelta(days=N)` — tính cả T7/CN/lễ | Lead time đã bao gồm buffer cho cuối tuần, hoặc bên vận chuyển chạy cả cuối tuần |
+| `working_days` | Trừ N **ngày làm việc**, tự động nhảy qua ngày không làm việc — xem `calendar.subtract_working_days` | Lead time do hãng vận chuyển/hải quan công bố theo "ngày làm việc" (vd. "3 ngày làm việc" thực ra mất hơn 3 ngày lịch nếu rơi vào cuối tuần) |
+
+Ngày nào là "ngày làm việc" cho mục đích này được xác định bởi
+`PlanningDataset.logistics_calendar` (một `WorkCalendar` dùng CHUNG cho toàn
+bộ việc tính ETA/ETD — độc lập với lịch của từng dây chuyền sản xuất). Nếu
+không khai báo, hệ thống dùng lịch mặc định T2-T7 (`calendar.default_business_calendar`).
+Ví dụ trong `data/sample/factory_demo.json`: `CUST-CAFE` dùng `working_days`
+nên PO có `requested_eta` rơi vào Thứ 2 sẽ bị lùi ETD mục tiêu về Thứ 7 tuần
+trước (bỏ qua Chủ nhật), trong khi `CUST-HP` dùng `calendar_days` thì trừ
+thẳng theo ngày lịch.
+
 `DemandLine.due_date` = ETD mục tiêu này (PO) hoặc `period_end` (Forecast).
 Đây là mục tiêu cho scheduler: **số lượng hàng phải hoàn thành sản xuất
 (+ buffer QC/đóng gói) trước ETD mục tiêu** — cụ thể là ràng buộc **MỀM**

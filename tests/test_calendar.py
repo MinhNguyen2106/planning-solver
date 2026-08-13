@@ -1,6 +1,12 @@
 from datetime import datetime, time
 
-from planning_solver.calendar import CompressedTimeline
+from planning_solver.calendar import (
+    CompressedTimeline,
+    add_working_days,
+    default_business_calendar,
+    is_working_day,
+    subtract_working_days,
+)
 from planning_solver.models import CalendarException, Shift, WorkCalendar
 
 
@@ -72,3 +78,51 @@ def test_fits_within_horizon():
     )
     assert tl.fits_within_horizon(0, 8) is True
     assert tl.fits_within_horizon(1, 8) is False
+
+
+# --- Quy đổi ngày làm việc (dùng cho ETA/ETD, xem demand.commitment_etd) ---
+
+
+def test_is_working_day():
+    cal = make_calendar()  # Thứ 2 - Thứ 6
+    assert is_working_day(cal, datetime(2026, 8, 10).date()) is True  # Thứ 2
+    assert is_working_day(cal, datetime(2026, 8, 15).date()) is False  # Thứ 7
+    assert is_working_day(cal, datetime(2026, 8, 16).date()) is False  # CN
+
+
+def test_subtract_working_days_skips_weekend():
+    cal = make_calendar()  # Thứ 2 - Thứ 6
+    # 2026-08-17 là Thứ 2. Lùi 3 ngày làm việc phải nhảy qua T7+CN (15,16)
+    # -> đếm ngược 14 (T6), 13 (T5), 12 (T4) -> kết quả 2026-08-12.
+    result = subtract_working_days(datetime(2026, 8, 17, 0, 0), 3, cal)
+    assert result == datetime(2026, 8, 12, 0, 0)
+
+
+def test_add_working_days_is_inverse_of_subtract():
+    cal = make_calendar()
+    start = datetime(2026, 8, 12, 0, 0)
+    forward = add_working_days(start, 3, cal)
+    assert forward == datetime(2026, 8, 17, 0, 0)
+    assert subtract_working_days(forward, 3, cal) == start
+
+
+def test_subtract_working_days_fractional_part():
+    cal = make_calendar()
+    result = subtract_working_days(datetime(2026, 8, 17, 0, 0), 1.5, cal)
+    # 1 ngày làm việc nguyên -> 2026-08-14 00:00, rồi trừ thêm 0.5 ngày thường
+    assert result == datetime(2026, 8, 13, 12, 0)
+
+
+def test_calendar_exception_excluded_from_working_days():
+    cal = make_calendar()
+    cal.exceptions.append(CalendarException(day=datetime(2026, 8, 14).date(), working=False))
+    # Giờ 2026-08-14 (T6) cũng bị coi là nghỉ -> lùi 3 ngày làm việc từ T2 17/8
+    # phải nhảy qua 16,15,14 -> đếm 13 (T5), 12 (T4), 11 (T3) -> kết quả 11/8.
+    result = subtract_working_days(datetime(2026, 8, 17, 0, 0), 3, cal)
+    assert result == datetime(2026, 8, 11, 0, 0)
+
+
+def test_default_business_calendar_is_monday_to_saturday():
+    cal = default_business_calendar()
+    assert is_working_day(cal, datetime(2026, 8, 15).date()) is True  # Thứ 7
+    assert is_working_day(cal, datetime(2026, 8, 16).date()) is False  # CN
