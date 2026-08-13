@@ -189,16 +189,53 @@ OrderPriority là string Enum (để dữ liệu JSON dễ đọc: "HIGH"/"NORMA
 nên mọi so sánh thứ tự phải tra qua bảng này thay vì dùng .value trực tiếp."""
 
 
-class SalesOrder(BaseModel):
-    """Đơn hàng bán / PO của khách hàng - nhu cầu đã CHỐT (firm demand)."""
+class Customer(BaseModel):
+    """Dữ liệu chủ (master data) khách hàng / tuyến giao hàng - dùng để quy
+    đổi ETA (hàng đến tay khách) <-> ETD (hàng rời xưởng) cho các PO chỉ khai
+    báo ETA."""
 
     id: str
-    customer: str
+    name: str
+    transit_lead_time_days: float = Field(
+        default=0,
+        ge=0,
+        description="Thời gian vận chuyển tiêu chuẩn từ xưởng đến khách hàng/tuyến này (ngày)",
+    )
+
+
+class SalesOrder(BaseModel):
+    """Đơn hàng bán / PO của khách hàng - nhu cầu đã CHỐT (firm demand).
+
+    Cam kết giao hàng của một PO được khai báo bằng MỘT trong hai mốc:
+      - `requested_etd`: khách/hợp đồng đã CHỐT SẴN ngày hàng phải RỜI XƯỞNG
+        (Estimated Time of Departure) -> dùng thẳng, không cần quy đổi.
+      - `requested_eta`: khách chỉ yêu cầu ngày hàng phải ĐẾN NƠI (Estimated
+        Time of Arrival tại khách hàng) -> hệ thống quy đổi ra ETD bằng cách
+        trừ đi `transit_lead_time_days` tra từ `Customer` (xem
+        `demand.commitment_etd()`).
+    Nếu cả hai cùng được khai báo, `requested_etd` được ưu tiên dùng trực tiếp.
+    """
+
+    id: str
+    customer_id: str
     product_id: str
     qty: float = Field(gt=0)
     order_date: datetime
-    requested_ship_date: datetime
+    requested_eta: Optional[datetime] = Field(
+        default=None, description="Ngày khách yêu cầu HÀNG ĐẾN NƠI (tại khách hàng)"
+    )
+    requested_etd: Optional[datetime] = Field(
+        default=None, description="Ngày khách/hợp đồng chốt HÀNG RỜI XƯỞNG - nếu có, dùng trực tiếp"
+    )
     priority: OrderPriority = OrderPriority.NORMAL
+
+    @model_validator(mode="after")
+    def _check_eta_or_etd(self) -> "SalesOrder":
+        if self.requested_eta is None and self.requested_etd is None:
+            raise ValueError(
+                f"SalesOrder '{self.id}': phải khai báo requested_eta hoặc requested_etd (hoặc cả hai)."
+            )
+        return self
 
 
 class ForecastEntry(BaseModel):
@@ -227,7 +264,18 @@ class DemandSource(str, Enum):
 
 
 class DemandLine(BaseModel):
-    """Một dòng nhu cầu sản xuất, đã net tồn kho thành phẩm và quy đổi lot size."""
+    """Một dòng nhu cầu sản xuất, đã net tồn kho thành phẩm và quy đổi lot size.
+
+    `due_date` là **ETD mục tiêu** (commitment ETD) mà sản xuất phải hoàn
+    thành trước đó:
+      - Với PO: quy đổi từ `requested_etd` (dùng trực tiếp) hoặc từ
+        `requested_eta` trừ `transit_lead_time_days` của khách hàng
+        (xem `demand.commitment_etd()`).
+      - Với Forecast: dùng `period_end` (dự báo không có ETA/ETD riêng).
+    Đây là mục tiêu MỀM cho scheduler (được đưa vào hàm mục tiêu tối thiểu
+    hoá trễ hạn có trọng số, không phải ràng buộc cứng loại đơn khỏi kế
+    hoạch) - xem scheduler.py.
+    """
 
     id: str
     product_id: str
@@ -247,6 +295,7 @@ class PlanningDataset(BaseModel):
     components: list[Component] = Field(default_factory=list)
     lines: list[ProductionLine] = Field(default_factory=list)
     workforce_pools: list[WorkforcePool] = Field(default_factory=list)
+    customers: list[Customer] = Field(default_factory=list)
     sales_orders: list[SalesOrder] = Field(default_factory=list)
     forecasts: list[ForecastEntry] = Field(default_factory=list)
     finished_goods_inventory: list[FinishedGoodsInventory] = Field(default_factory=list)
@@ -256,6 +305,9 @@ class PlanningDataset(BaseModel):
 
     def component_map(self) -> dict[str, Component]:
         return {c.id: c for c in self.components}
+
+    def customer_map(self) -> dict[str, Customer]:
+        return {c.id: c for c in self.customers}
 
     def line_map(self) -> dict[str, ProductionLine]:
         return {l.id: l for l in self.lines}

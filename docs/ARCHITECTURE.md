@@ -4,27 +4,72 @@
 
 Đầu vào:
 
-- **PO** (`SalesOrder`): đơn hàng khách đã chốt — sản phẩm, số lượng, ngày
-  cần giao (`requested_ship_date`), độ ưu tiên.
-- **Forecast** (`ForecastEntry`): dự báo nhu cầu theo giai đoạn, chưa chốt.
+- **PO** (`SalesOrder`): đơn hàng khách đã chốt — sản phẩm, số lượng, độ ưu
+  tiên, và cam kết giao hàng khai báo bằng **ETA hoặc ETD của chính PO đó**
+  (xem mục 2 bên dưới).
+- **Forecast** (`ForecastEntry`): dự báo nhu cầu theo giai đoạn, chưa chốt —
+  dùng `period_end` làm hạn (dự báo chưa có khách/tuyến giao hàng cụ thể nên
+  không có ETA/ETD riêng).
 - Dữ liệu nền: sản phẩm + BOM, tồn kho (thành phẩm & linh kiện), lịch nhập
-  hàng linh kiện, dây chuyền sản xuất + lịch làm việc + năng suất, tổ nhân lực.
+  hàng linh kiện, dây chuyền sản xuất + lịch làm việc + năng suất, tổ nhân
+  lực, khách hàng (`Customer` — transit lead time để quy đổi ETA↔ETD).
 
 Đầu ra: **kế hoạch sản xuất** — mỗi nhu cầu được gán vào dây chuyền nào, chạy
-từ lúc nào đến lúc nào, kèm **ETA** (nguyên vật liệu sẵn sàng) và **ETD**
-(thành phẩm sẵn sàng xuất), có đúng hạn hay không.
+từ lúc nào đến lúc nào, kèm **ETA nguyên vật liệu** (đủ NVL từ lúc nào —
+mrp.py) và **ETD hệ thống tính toán** (thành phẩm thực tế sẵn sàng xuất dựa
+trên lịch chạy — eta_etd.py), so với **ETD mục tiêu** (quy đổi từ PO/Forecast)
+để biết có đúng hạn hay không.
+
+## 2. Hai khái niệm ETA/ETD KHÔNG được nhầm lẫn
+
+Hệ thống có **hai cặp ETA/ETD hoàn toàn khác nhau**, cố tình đặt tên riêng để
+không lẫn:
+
+| | Ý nghĩa | Nguồn | Field |
+|---|---|---|---|
+| **ETA/ETD của PO** | Cam kết giao hàng với KHÁCH. PO khai báo ETA (hàng đến tay khách) HOẶC ETD (hàng rời xưởng) — chỉ cần 1 trong 2. | Input (`SalesOrder.requested_eta` / `requested_etd`) | Quy đổi thành `DemandLine.due_date` — **ETD mục tiêu** |
+| **ETA của nguyên vật liệu** | Khi nào linh kiện/NVL đủ để BẮT ĐẦU sản xuất đơn đó | Tính toán bởi MRP (mrp.py) | `PlanLine.eta` |
+| **ETD hệ thống tính** | Khi nào thành phẩm THỰC SỰ sẵn sàng xuất, dựa trên lịch chạy dây chuyền đã giải + buffer QC/đóng gói | Tính toán bởi scheduler + eta_etd.py | `PlanLine.etd` |
+
+Quy đổi ETA(PO) → ETD mục tiêu (`demand.commitment_etd`):
+
+```
+nếu PO có requested_etd:            ETD mục tiêu = requested_etd  (dùng thẳng)
+nếu PO chỉ có requested_eta:        ETD mục tiêu = requested_eta − transit_lead_time_days(khách hàng)
+```
+
+`transit_lead_time_days` tra từ `Customer` (master data khách hàng/tuyến giao
+hàng) — mỗi PO chỉ tham chiếu `customer_id`, không tự khai báo lead time
+riêng, để chuẩn hoá dữ liệu vận chuyển tập trung một chỗ.
+
+`DemandLine.due_date` = ETD mục tiêu này (PO) hoặc `period_end` (Forecast).
+Đây là mục tiêu cho scheduler: **số lượng hàng phải hoàn thành sản xuất
+(+ buffer QC/đóng gói) trước ETD mục tiêu** — cụ thể là ràng buộc **MỀM**
+(xem mục 6): scheduler luôn cố xếp lịch cho mọi đơn khả thi (đủ NVL, có dây
+chuyền), tối thiểu hoá tổng số giờ trễ so với ETD mục tiêu theo trọng số ưu
+tiên, thay vì loại hẳn đơn ra khỏi kế hoạch nếu không kịp — vì trong thực tế
+kế hoạch viên vẫn cần thấy TOÀN BỘ đơn (kể cả đơn trễ) để biết mà xử lý
+(thương lượng lại khách, tăng ca, đặt gia công ngoài...), không phải để hệ
+thống âm thầm bỏ qua.
+
+So sánh cuối cùng: `PlanLine.etd (ETD hệ thống tính) <= PlanLine.due_date
+(ETD mục tiêu)` ⇒ `on_time`. Vì `etd` đã cộng thêm buffer QC/đóng gói, điều
+kiện này thực chất đòi hỏi sản xuất phải hoàn thành SỚM HƠN ETD mục tiêu ít
+nhất bằng khoảng buffer đó — đúng với thực tế cần thời gian đóng gói/QC
+trước khi hàng có thể rời xưởng.
 
 Đây là bài toán MRP (Material Requirements Planning) nối với APS (Advanced
 Planning & Scheduling) — chuẩn công nghiệp là 2 giai đoạn tách rời nhưng liên
 kết chặt: MRP quyết định "khi nào có NVL để bắt đầu", APS quyết định "bắt đầu
 ở đâu, chạy đến khi nào".
 
-## 2. Luồng xử lý (pipeline.py)
+## 3. Luồng xử lý (pipeline.py)
 
 ```
 demand.build_demand_lines()
+  -> quy đổi ETA/ETD của từng PO ra ETD mục tiêu (commitment_etd, mục 2)
   -> net PO/Forecast, trừ tồn kho thành phẩm, quy đổi lot size
-  -> list[DemandLine]
+  -> list[DemandLine]  (due_date = ETD mục tiêu)
 
 mrp.allocate_materials()
   -> nổ BOM từng DemandLine, phân bổ tồn kho + lô nhập hàng linh kiện
@@ -45,7 +90,7 @@ eta_etd.build_plan_report()
   -> PlanReport
 ```
 
-## 3. Mô hình lịch làm việc (calendar.py) — "trục thời gian nén"
+## 4. Mô hình lịch làm việc (calendar.py) — "trục thời gian nén"
 
 Mỗi dây chuyền có lịch làm việc riêng (ca kíp theo tuần + ngoại lệ theo
 ngày: nghỉ lễ / tăng ca). Thay vì lập lịch trên trục thời gian thực (dễ phải
@@ -61,7 +106,7 @@ xét bằng số slot làm việc *trước* thời điểm đó — hàm đơn 
 việc so sánh "hoàn thành trước/sau hạn" vẫn đúng dù `due_date` rơi đúng vào
 giờ nghỉ.
 
-## 4. MRP — phân bổ tồn kho/linh kiện theo thứ tự ưu tiên (mrp.py)
+## 5. MRP — phân bổ tồn kho/linh kiện theo thứ tự ưu tiên (mrp.py)
 
 Với mỗi linh kiện, dựng "đường cung tích luỹ":
 
@@ -84,7 +129,7 @@ cung trong toàn bộ các lô đã biết, đơn bị đánh dấu `blocked` k�
 thiếu hụt để bộ phận mua hàng xử lý — các đơn này **không** được đưa vào
 scheduler (không thể lập lịch sản xuất khi chưa biết bao giờ có NVL).
 
-## 5. Scheduler — CP-SAT (scheduler.py)
+## 6. Scheduler — CP-SAT (scheduler.py)
 
 Biến quyết định: với mỗi cặp (đơn, dây chuyền đủ điều kiện) khả thi trong
 horizon, có `assigned` (bool) + `start`/`end` (interval trên trục nén của
@@ -98,18 +143,22 @@ Ràng buộc:
 | Dây chuyền chạy 1 lệnh/lúc, đúng giờ làm việc | `AddNoOverlap` trên interval (trục đã nén theo lịch riêng từng line) |
 | Không sản xuất trước khi có NVL | domain của `start` bắt đầu từ slot sớm nhất ≥ ETA |
 | Nhân lực dùng chung nhiều dây chuyền | `AddCumulative` gộp interval của các line cùng tổ **nếu các line đó có lịch làm việc giống hệt nhau** (cùng toạ độ trục nén) |
-| Ưu tiên đơn gấp/quan trọng | mục tiêu tối thiểu hoá **tổng trễ hạn có trọng số** theo priority (HIGH=100, NORMAL=10, LOW=1) |
+| Ưu tiên đơn gấp/quan trọng, **ETD mục tiêu là ràng buộc MỀM** | mục tiêu tối thiểu hoá **tổng trễ hạn có trọng số** so với `due_date` (= ETD mục tiêu, mục 2) theo priority (HIGH=100, NORMAL=10, LOW=1). Đơn không kịp ETD mục tiêu vẫn được xếp lịch (trễ), KHÔNG bị loại khỏi kế hoạch — chỉ những đơn thiếu NVL (xem mục 5) hoặc hết chỗ trong horizon lập kế hoạch mới bị loại (`unscheduled`). |
 
-## 6. ETA / ETD (eta_etd.py)
+## 7. ETA / ETD — tổng hợp lại 3 mốc trong `PlanLine` (eta_etd.py)
 
-- **ETA** (Estimated Time of Arrival): thời điểm nguyên vật liệu/linh kiện
-  sẵn sàng đầy đủ để bắt đầu sản xuất — đầu ra của MRP.
-- **ETD** (Estimated Time of Departure): thời điểm thành phẩm sẵn sàng xuất
-  xưởng = thời điểm sản xuất hoàn thành (đầu ra scheduler) + thời gian
-  QC/đóng gói (`Product.post_production_buffer_hours`).
-- So sánh `ETD` với `due_date` (hạn PO/kỳ Forecast) ⇒ `on_time` / `delay_hours`.
+`eta_etd.build_plan_report()` gộp 3 mốc thời gian (đã giải thích ở mục 2)
+thành từng dòng `PlanLine`:
 
-## 7. Giới hạn & hướng mở rộng (v1)
+- `eta`: **ETA nguyên vật liệu** — đầu ra của MRP (mục 5), khi nào đủ NVL để
+  bắt đầu sản xuất đơn này.
+- `etd`: **ETD hệ thống tính** = thời điểm sản xuất hoàn thành (đầu ra
+  scheduler, mục 6) + thời gian QC/đóng gói (`Product.post_production_buffer_hours`).
+- `due_date`: **ETD mục tiêu** — quy đổi từ `SalesOrder.requested_eta`/
+  `requested_etd` (PO) hoặc `period_end` (Forecast), xem mục 2.
+- `on_time = (etd <= due_date)`, `delay_hours = max(0, etd − due_date)`.
+
+## 8. Giới hạn & hướng mở rộng (v1)
 
 Đây là một MVP có kiến trúc đúng đắn cho bài toán thật, nhưng có vài đơn giản
 hoá được ghi nhận rõ ràng để dễ mở rộng:
@@ -136,3 +185,10 @@ hoá được ghi nhận rõ ràng để dễ mở rộng:
    production thật nên chuyển sang DB (Postgres) + migration, và API cần auth.
 6. **Không có UI trực quan (Gantt)** — `PlanReport` hiện là dữ liệu thô; có
    thể build thêm dashboard (vd. React + timeline chart) đọc từ `/plan/run`.
+7. **Transit lead time ở cấp khách hàng, chưa phải tuyến/phương thức vận
+   chuyển** — `Customer.transit_lead_time_days` là MỘT con số cố định cho
+   mỗi khách hàng. Nếu một khách có nhiều kho nhận hàng/nhiều phương thức
+   vận chuyển (đường bộ nhanh vs. đường biển chậm) với lead time khác nhau,
+   cần tách thành entity `ShippingLane` riêng (khách hàng × phương thức/kho
+   nhận → lead time), PO tham chiếu `shipping_lane_id` thay vì `customer_id`
+   trực tiếp.

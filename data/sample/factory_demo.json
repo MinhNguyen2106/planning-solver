@@ -1,4 +1,10 @@
 {
+  "customers": [
+    {"id": "CUST-HP", "name": "Nội thất Hòa Phát", "transit_lead_time_days": 2},
+    {"id": "CUST-XANH", "name": "Siêu thị Nội thất Xanh", "transit_lead_time_days": 3},
+    {"id": "CUST-CAFE", "name": "Chuỗi Cafe Việt", "transit_lead_time_days": 1},
+    {"id": "CUST-SCHOOL", "name": "Trường học ABC", "transit_lead_time_days": 4}
+  ],
   "products": [
     {
       "id": "P-CHAIR",
@@ -129,38 +135,38 @@
   "sales_orders": [
     {
       "id": "SO-1001",
-      "customer": "Nội thất Hòa Phát",
+      "customer_id": "CUST-HP",
       "product_id": "P-CHAIR",
       "qty": 1200,
       "order_date": "2026-08-10T00:00:00",
-      "requested_ship_date": "2026-08-24T00:00:00",
+      "requested_eta": "2026-08-26T00:00:00",
       "priority": "HIGH"
     },
     {
       "id": "SO-1002",
-      "customer": "Siêu thị Nội thất Xanh",
+      "customer_id": "CUST-XANH",
       "product_id": "P-CHAIR",
       "qty": 800,
       "order_date": "2026-08-11T00:00:00",
-      "requested_ship_date": "2026-08-26T00:00:00",
+      "requested_etd": "2026-08-26T00:00:00",
       "priority": "NORMAL"
     },
     {
       "id": "SO-1003",
-      "customer": "Chuỗi Cafe Việt",
+      "customer_id": "CUST-CAFE",
       "product_id": "P-TABLE",
       "qty": 300,
       "order_date": "2026-08-12T00:00:00",
-      "requested_ship_date": "2026-08-23T00:00:00",
+      "requested_eta": "2026-08-24T00:00:00",
       "priority": "HIGH"
     },
     {
       "id": "SO-1004",
-      "customer": "Trường học ABC",
+      "customer_id": "CUST-SCHOOL",
       "product_id": "P-TABLE",
       "qty": 150,
       "order_date": "2026-08-13T00:00:00",
-      "requested_ship_date": "2026-09-05T00:00:00",
+      "requested_etd": "2026-09-05T00:00:00",
       "priority": "NORMAL"
     }
   ],

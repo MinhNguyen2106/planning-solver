@@ -13,7 +13,9 @@ tôn trọng đồng thời các ràng buộc về:
 ## Kiến trúc tổng quan
 
 ```
-PO (SalesOrder) + Forecast ──► demand.py ──► DemandLine (nhu cầu đã net)
+PO (ETA hoặc ETD của khách) ──┐
+Forecast (period_end)      ──┼─► demand.py ──► DemandLine (due_date = ETD mục tiêu, đã net)
+Customer (transit lead time) ┘        (ETA PO ⇒ quy đổi ra ETD mục tiêu bằng transit lead time)
                                                     │
                                                     ▼
                           mrp.py  (nổ BOM, phân bổ tồn kho + lịch nhập
@@ -21,15 +23,25 @@ PO (SalesOrder) + Forecast ──► demand.py ──► DemandLine (nhu cầu �
                                                     │
                                                     ▼
                      scheduler.py  (OR-Tools CP-SAT: gán dây chuyền,
-                        tôn trọng lịch làm việc, nhân lực, hạn giao)
+                        tôn trọng lịch làm việc, nhân lực; ETD mục tiêu
+                        là ràng buộc MỀM - tối thiểu hoá trễ hạn có trọng số)
                                                     │
                                                     ▼
-                        eta_etd.py  (ETD = hoàn thành SX + buffer QC/đóng gói,
-                                      so sánh với due date ⇒ on-time / trễ)
+                        eta_etd.py  (ETD hệ thống tính = hoàn thành SX +
+                                      buffer QC/đóng gói; so với ETD mục
+                                      tiêu ⇒ on-time / trễ)
                                                     │
                                                     ▼
                               PlanReport (kế hoạch cuối cùng)
 ```
+
+**Về ETA/ETD**: hệ thống phân biệt rõ 2 cặp — (1) ETA/ETD của PO là cam kết
+giao hàng với khách, PO khai báo MỘT trong hai (ETA hàng đến khách, hoặc ETD
+hàng rời xưởng), quy đổi qua lại bằng `transit_lead_time_days` của khách hàng
+(`Customer`); (2) ETA nguyên vật liệu (đầu ra MRP) và ETD hệ thống tính (đầu
+ra scheduler) là hai mốc hệ thống TỰ TÍNH dựa trên tồn kho/lịch dây chuyền,
+so sánh với ETD mục tiêu ở bước (1) để biết đúng hạn hay không. Xem chi tiết,
+kèm ví dụ, ở mục 2 của [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 Chi tiết thuật toán & các giả định đơn giản hoá: xem [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 

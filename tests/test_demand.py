@@ -1,7 +1,11 @@
 from datetime import datetime
 
-from planning_solver.demand import build_demand_lines
+import pytest
+from pydantic import ValidationError
+
+from planning_solver.demand import build_demand_lines, commitment_etd
 from planning_solver.models import (
+    Customer,
     DemandSource,
     FinishedGoodsInventory,
     ForecastEntry,
@@ -15,16 +19,57 @@ def base_product(**kwargs) -> Product:
     return Product(id="P1", name="SP1", **kwargs)
 
 
+def so_etd(id_, etd, **kwargs) -> SalesOrder:
+    return SalesOrder(
+        id=id_, customer_id="C1", product_id="P1", qty=kwargs.pop("qty", 100),
+        order_date=datetime(2026, 1, 1), requested_etd=etd, **kwargs,
+    )
+
+
+def test_requested_etd_used_directly():
+    so = so_etd("SO1", datetime(2026, 2, 5))
+    assert commitment_etd(so, {}) == datetime(2026, 2, 5)
+
+
+def test_requested_eta_converted_using_customer_transit_lead_time():
+    so = SalesOrder(
+        id="SO1", customer_id="CUST-A", product_id="P1", qty=100,
+        order_date=datetime(2026, 1, 1), requested_eta=datetime(2026, 2, 10),
+    )
+    customers = {"CUST-A": Customer(id="CUST-A", name="A", transit_lead_time_days=3)}
+    assert commitment_etd(so, customers) == datetime(2026, 2, 7)
+
+
+def test_requested_etd_takes_precedence_over_eta():
+    so = SalesOrder(
+        id="SO1", customer_id="CUST-A", product_id="P1", qty=100,
+        order_date=datetime(2026, 1, 1),
+        requested_eta=datetime(2026, 2, 10), requested_etd=datetime(2026, 2, 1),
+    )
+    customers = {"CUST-A": Customer(id="CUST-A", name="A", transit_lead_time_days=3)}
+    assert commitment_etd(so, customers) == datetime(2026, 2, 1)
+
+
+def test_missing_eta_and_etd_is_rejected():
+    with pytest.raises(ValidationError):
+        SalesOrder(
+            id="SO1", customer_id="C1", product_id="P1", qty=100,
+            order_date=datetime(2026, 1, 1),
+        )
+
+
+def test_missing_customer_master_data_defaults_to_zero_lead_time():
+    so = SalesOrder(
+        id="SO1", customer_id="UNKNOWN", product_id="P1", qty=100,
+        order_date=datetime(2026, 1, 1), requested_eta=datetime(2026, 2, 10),
+    )
+    assert commitment_etd(so, {}) == datetime(2026, 2, 10)
+
+
 def test_finished_goods_netted_against_earliest_due_order_first():
     p = base_product()
-    so_early = SalesOrder(
-        id="SO-EARLY", customer="A", product_id="P1", qty=100,
-        order_date=datetime(2026, 1, 1), requested_ship_date=datetime(2026, 1, 10),
-    )
-    so_late = SalesOrder(
-        id="SO-LATE", customer="B", product_id="P1", qty=100,
-        order_date=datetime(2026, 1, 1), requested_ship_date=datetime(2026, 1, 20),
-    )
+    so_early = so_etd("SO-EARLY", datetime(2026, 1, 10))
+    so_late = so_etd("SO-LATE", datetime(2026, 1, 20))
     ds = PlanningDataset(
         products=[p],
         sales_orders=[so_late, so_early],
@@ -39,10 +84,7 @@ def test_finished_goods_netted_against_earliest_due_order_first():
 
 def test_forecast_netted_against_po_in_same_period():
     p = base_product()
-    so = SalesOrder(
-        id="SO1", customer="A", product_id="P1", qty=300,
-        order_date=datetime(2026, 1, 1), requested_ship_date=datetime(2026, 2, 5),
-    )
+    so = so_etd("SO1", datetime(2026, 2, 5), qty=300)
     fc = ForecastEntry(
         id="FC1", product_id="P1", qty=1000,
         period_start=datetime(2026, 2, 1), period_end=datetime(2026, 2, 28),
@@ -56,10 +98,7 @@ def test_forecast_netted_against_po_in_same_period():
 
 def test_forecast_fully_absorbed_by_po_disappears():
     p = base_product()
-    so = SalesOrder(
-        id="SO1", customer="A", product_id="P1", qty=1000,
-        order_date=datetime(2026, 1, 1), requested_ship_date=datetime(2026, 2, 5),
-    )
+    so = so_etd("SO1", datetime(2026, 2, 5), qty=1000)
     fc = ForecastEntry(
         id="FC1", product_id="P1", qty=500,
         period_start=datetime(2026, 2, 1), period_end=datetime(2026, 2, 28),
@@ -71,10 +110,7 @@ def test_forecast_fully_absorbed_by_po_disappears():
 
 def test_lot_size_rounding_applied():
     p = base_product(min_lot_size=50, lot_size_multiple=50)
-    so = SalesOrder(
-        id="SO1", customer="A", product_id="P1", qty=101,
-        order_date=datetime(2026, 1, 1), requested_ship_date=datetime(2026, 2, 5),
-    )
+    so = so_etd("SO1", datetime(2026, 2, 5), qty=101)
     ds = PlanningDataset(products=[p], sales_orders=[so])
     lines = build_demand_lines(ds)
     assert lines[0].qty == 150
