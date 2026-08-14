@@ -142,9 +142,31 @@ class LineProductRate(BaseModel):
     product_id: str
     rate_per_hour: float = Field(gt=0, description="Số lượng sản phẩm/giờ khi dây chuyền chạy")
     changeover_minutes: float = Field(
-        default=0, ge=0, description="Thời gian chuyển đổi (setup) khi bắt đầu lệnh sản xuất này"
+        default=0, ge=0,
+        description=(
+            "Thời gian chuyển đổi (setup) PHẲNG khi bắt đầu lệnh sản xuất này - "
+            "dùng khi dây chuyền KHÔNG khai báo ProductionLine.sequence_changeovers "
+            "(giá trị mặc định/fallback cuối cùng của changeover_minutes_for())."
+        ),
     )
     required_headcount: int = Field(default=0, ge=0, description="Số nhân công cần để vận hành dây chuyền cho SP này")
+
+
+class ChangeoverRule(BaseModel):
+    """Một luật changeover PHỤ THUỘC sản phẩm chạy TRƯỚC trên cùng dây chuyền
+    (sequence-dependent changeover) - xem ProductionLine.sequence_changeovers."""
+
+    from_product_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "Sản phẩm chạy NGAY TRƯỚC trên dây chuyền. None = áp dụng cho lệnh "
+            "ĐẦU TIÊN trên dây chuyền (từ trạng thái nghỉ/đầu ca) HOẶC làm mặc "
+            "định dùng chung (wildcard) khi chưa có luật khớp chính xác cho cặp "
+            "(from, to) cụ thể - xem ProductionLine.changeover_minutes_for()."
+        ),
+    )
+    to_product_id: str
+    minutes: float = Field(ge=0)
 
 
 class PlanningStrategy(str, Enum):
@@ -276,12 +298,48 @@ class ProductionLine(BaseModel):
     calendar: WorkCalendar
     product_rates: list[LineProductRate] = Field(default_factory=list)
     labor_pool_id: Optional[str] = None
+    sequence_changeovers: list[ChangeoverRule] = Field(
+        default_factory=list,
+        description=(
+            "Luật changeover PHỤ THUỘC THỨ TỰ sản phẩm liền trước trên dây "
+            "chuyền này (sequence-dependent changeover). RỖNG (mặc định) = giữ "
+            "NGUYÊN hành vi cũ - scheduler.py dùng AddNoOverlap và "
+            "LineProductRate.changeover_minutes cộng phẳng vào MỌI lệnh, không "
+            "phân biệt sản phẩm chạy trước. Khai báo khác rỗng chuyển dây "
+            "chuyền này sang mô hình AddCircuit (đặt lệnh theo trình tự tối ưu, "
+            "changeover tính đúng theo cặp sản phẩm liên tiếp thực tế)."
+        ),
+    )
 
     def rate_for(self, product_id: str) -> Optional[LineProductRate]:
         return next((r for r in self.product_rates if r.product_id == product_id), None)
 
     def eligible_products(self) -> set[str]:
         return {r.product_id for r in self.product_rates}
+
+    def changeover_minutes_for(self, from_product_id: Optional[str], to_product_id: str) -> float:
+        """Tra số phút changeover khi chuyển từ `from_product_id` (None = đầu
+        ca/nghỉ) sang `to_product_id`, theo 3 tầng ưu tiên:
+          1) luật khớp CHÍNH XÁC cặp (from_product_id, to_product_id).
+          2) nếu `from_product_id` là một sản phẩm thật (khác None) nhưng
+             không có luật riêng cho cặp đó: fallback về luật "wildcard"
+             (from_product_id=None, to_product_id) nếu có khai báo - dùng làm
+             mặc định dùng chung khi chưa liệt kê đủ ma trận N×N.
+          3) fallback cuối: `changeover_minutes` PHẲNG của `LineProductRate`
+             cho `to_product_id` - đúng hành vi CŨ (không có
+             `sequence_changeovers` nào -> luôn rơi vào tầng này, bất kể
+             `from_product_id` -> chứng minh hành vi cũ là 1 trường hợp đặc
+             biệt của cơ chế mới).
+        """
+        for rule in self.sequence_changeovers:
+            if rule.to_product_id == to_product_id and rule.from_product_id == from_product_id:
+                return rule.minutes
+        if from_product_id is not None:
+            for rule in self.sequence_changeovers:
+                if rule.to_product_id == to_product_id and rule.from_product_id is None:
+                    return rule.minutes
+        rate = self.rate_for(to_product_id)
+        return rate.changeover_minutes if rate else 0.0
 
 
 class WorkforcePool(BaseModel):

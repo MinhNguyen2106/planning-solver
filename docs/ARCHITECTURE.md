@@ -270,10 +270,60 @@ Ràng buộc:
 | Ràng buộc | Cách mô hình hoá |
 |---|---|
 | Mỗi đơn dùng đúng 1 dây chuyền | `sum(assigned[d, *]) == 1` |
-| Dây chuyền chạy 1 lệnh/lúc, đúng giờ làm việc | `AddNoOverlap` trên interval (trục đã nén theo lịch riêng từng line) |
+| Dây chuyền chạy 1 lệnh/lúc, đúng giờ làm việc | `AddNoOverlap` trên interval (trục đã nén theo lịch riêng từng line) - **hoặc** `AddCircuit` nếu dây chuyền có `sequence_changeovers` (xem mục 8b) |
 | Không sản xuất trước khi có NVL | domain của `start` bắt đầu từ slot sớm nhất ≥ ETA |
 | Nhân lực dùng chung nhiều dây chuyền | `AddCumulative` gộp interval của các line cùng tổ **nếu các line đó có lịch làm việc giống hệt nhau** (cùng toạ độ trục nén) |
 | Ưu tiên đơn gấp/quan trọng, **ETD mục tiêu là ràng buộc MỀM** | mục tiêu tối thiểu hoá **tổng trễ hạn có trọng số** so với `due_date` (= ETD mục tiêu, mục 2) theo priority (HIGH=100, NORMAL=10, LOW=1). Đơn không kịp ETD mục tiêu vẫn được xếp lịch (trễ), KHÔNG bị loại khỏi kế hoạch — chỉ những đơn thiếu NVL (xem mục 7) hoặc hết chỗ trong horizon lập kế hoạch mới bị loại (`unscheduled`). |
+
+### 8b. Changeover phụ thuộc thứ tự sản phẩm (sequence-dependent changeover)
+
+Mặc định, `LineProductRate.changeover_minutes` là một hằng số PHẲNG cộng
+thẳng vào thời lượng của MỌI lệnh trên dây chuyền, không phân biệt sản phẩm
+nào chạy ngay trước nó (`_job_hours`). Đây là hành vi giữ nguyên cho MỌI dây
+chuyền KHÔNG khai báo `ProductionLine.sequence_changeovers`.
+
+Khi một dây chuyền khai báo `sequence_changeovers` (khác rỗng), nó chuyển
+sang mô hình **phụ thuộc sản phẩm chạy TRƯỚC** (`_production_hours` +
+`_add_sequenced_ordering`, dùng `AddCircuit` của CP-SAT thay cho
+`AddNoOverlap`):
+
+- Thời lượng interval của mỗi lệnh CHỈ còn thời gian sản xuất thuần
+  (`qty / rate_per_hour`) - changeover không còn cộng vào duration.
+- Dây chuyền được mô hình hoá như một **vòng khép kín (circuit)** đi qua 1
+  node "depot" (đại diện đầu/cuối ca) và mỗi lệnh khả thi là 1 node. Lệnh
+  nào KHÔNG thực sự được gán cho dây chuyền này thì "tự vòng" (self-loop
+  = `assigned.Not()`) để bị loại khỏi circuit - đúng cơ chế chuẩn của
+  `AddCircuit` cho node tuỳ chọn.
+- Mỗi cạnh THẬT trong circuit (depot→lệnh đầu tiên, hoặc lệnh này→lệnh kế
+  tiếp) mang theo 1 ràng buộc: nếu cạnh đó được chọn, lệnh phía sau phải bắt
+  đầu đủ trễ để chừa đúng khoảng changeover tương ứng
+  (`ProductionLine.changeover_minutes_for(from_product, to_product)`, quy
+  đổi ra slot qua `CompressedTimeline.changeover_slots` - **không** có sàn
+  tối thiểu 1 slot như `duration_in_slots`, cho phép changeover = 0 khi 2
+  lệnh cùng sản phẩm chạy liên tiếp).
+- `changeover_minutes_for` tra theo 3 tầng: (1) luật khớp CHÍNH XÁC cặp
+  (from, to); (2) nếu from là 1 sản phẩm thật, fallback về luật "wildcard"
+  (from=None, to) làm mặc định dùng chung; (3) fallback cuối:
+  `changeover_minutes` phẳng của `LineProductRate` - đảm bảo dây chuyền
+  không khai báo `sequence_changeovers` LUÔN rơi vào tầng 3, tái hiện đúng
+  hành vi cũ.
+
+**2 điều cần lưu ý minh bạch** khi dùng cơ chế này:
+1. `PlanLine.production_start`/`ScheduledJob.start_dt` đổi ý nghĩa trên dây
+   chuyền đã opt-in: giờ là lúc **BẮT ĐẦU SẢN XUẤT thực sự** (sau khi đã trừ
+   khoảng changeover), không còn gộp changeover vào đầu block như trước.
+   `end_dt` (sản xuất xong) và mọi thứ hạ nguồn (`eta_etd.py`) không đổi ý
+   nghĩa.
+2. Khoảng changeover (gap) hiện **KHÔNG tiêu tốn nhân lực** trong
+   `AddCumulative` - nó nằm ngoài mọi `IntervalVar`, khác với dây chuyền cũ
+   (changeover nằm trong interval nên có tính vào Cumulative). Xem thêm mục
+   Giới hạn.
+
+Chọn `AddCircuit` (thay vì cố gắn thêm vào `AddNoOverlap`) theo đúng gợi ý
+đã ghi trong bản thiết kế ban đầu của tài liệu này: `AddNoOverlap` không
+lộ ra cấu trúc "lệnh nào đứng ngay trước lệnh nào" để gắn chi phí/khoảng
+trống theo cặp sản phẩm liên tiếp; `AddCircuit` (mô hình vòng Hamilton có
+node tuỳ chọn) là cơ chế chuẩn của CP-SAT cho đúng bài toán này.
 
 ## 9. ETA / ETD — tổng hợp lại 3 mốc trong `PlanLine` (eta_etd.py)
 
@@ -314,10 +364,15 @@ hoá được ghi nhận rõ ràng để dễ mở rộng:
    thành các đoạn theo từng ca thực tế (segmentation), rồi cộng dồn nhân lực
    theo ngày/ca trên trục chủ đó — đúng như cách các hệ APS thương mại
    (SAP PP/DS, Preactor…) xử lý.
-4. **Changeover đơn giản hoá** — thời gian chuyển đổi (`changeover_minutes`)
-   được cộng cố định vào mọi lệnh, chưa phụ thuộc vào sản phẩm chạy TRƯỚC đó
-   trên cùng dây chuyền (sequence-dependent changeover). Có thể mở rộng bằng
-   `AddCircuit`/`ArcCost` theo cặp sản phẩm liên tiếp.
+4. ~~Changeover đơn giản hoá~~ **ĐÃ GIẢI QUYẾT** — sequence-dependent
+   changeover (phụ thuộc sản phẩm chạy TRƯỚC) đã hỗ trợ qua
+   `ProductionLine.sequence_changeovers` + `AddCircuit` (xem mục 8b), opt-in
+   theo từng dây chuyền. Hạn chế còn lại của cơ chế này: (a) khoảng
+   changeover chưa tiêu tốn nhân lực trong `AddCumulative` (nằm ngoài mọi
+   `IntervalVar` - modeling đúng đòi hỏi thêm 1 tầng interval động theo cạnh
+   được chọn, phức tạp hơn nhiều, để dành cho v2); (b) `AddCircuit` tốn
+   O(n²) biến theo số lệnh khả thi trên 1 dây chuyền - không nên bật cho
+   dây chuyền có hàng trăm lệnh (xem giới hạn tiếp theo về kích thước lot).
 5. **BOM 1 cấp** — chưa hỗ trợ bán thành phẩm (linh kiện được sản xuất nội bộ
    từ linh kiện khác, đa cấp). Có thể mở rộng bằng cách đệ quy `mrp.py`.
 6. **Không có persistence** — dữ liệu đọc/ghi qua JSON (`io_utils.py`). Cho

@@ -5,7 +5,9 @@ Hệ thống lập kế hoạch sản xuất nhà máy: nhận **PO (đơn hàng
 tôn trọng đồng thời các ràng buộc về:
 
 - **Sản phẩm** (BOM/định mức nguyên vật liệu, lot size, chiến lược **Make-to-Order hoặc Make-to-Stock** - xem bên dưới)
-- **Dây chuyền sản xuất** (năng suất theo sản phẩm, thời gian chuyển đổi)
+- **Dây chuyền sản xuất** (năng suất theo sản phẩm, thời gian chuyển đổi -
+  bao gồm cả **changeover phụ thuộc sản phẩm chạy trước**, sequence-dependent,
+  tuỳ chọn theo từng dây chuyền)
 - **Thời gian làm việc của dây chuyền** (ca kíp, ngày lễ, tăng ca)
 - **Tồn kho & linh kiện** (tồn kho thành phẩm, tồn kho NVL, lịch nhập hàng)
 - **Con người** (tổ/nhóm nhân lực dùng chung nhiều dây chuyền, giới hạn headcount)
@@ -89,7 +91,10 @@ kiện - ghế & bàn nhựa (MTO) và ghế đẩu nhựa (MTS, minh hoạ lệ
 kho tự sinh), mỗi sản phẩm đều cấu hình `lot_size_multiple` nên PO/Forecast
 sẽ bị chia thành nhiều lot khi in ra (vd. PO 1100 cái chia 3 lot: 400+400+300),
 3 dây chuyền (2 dây chuyền ép nhựa dùng chung 1 tổ nhân lực, 1 dây chuyền
-lắp ráp riêng), 4 PO + 3 dòng dự báo.
+lắp ráp riêng), 4 PO + 3 dòng dự báo. `LINE-A1` khai báo
+`sequence_changeovers` (đổi khuôn ghế↔bàn tốn 90 phút, cùng sản phẩm liên
+tiếp = 0 phút) để minh hoạ changeover phụ thuộc thứ tự; `LINE-A2`/`LINE-B`
+vẫn dùng changeover phẳng cũ - cả 2 cách cùng tồn tại trong 1 dataset.
 
 ## Chạy API
 
@@ -130,6 +135,7 @@ tests/          pytest cho từng module + end-to-end
 ## Mở rộng tiếp theo (đề xuất)
 
 Xem mục "Giới hạn & hướng mở rộng" trong `docs/ARCHITECTURE.md` — bao gồm:
-chia nhỏ lô hàng trên nhiều dây chuyền, ràng buộc nhân lực đa kỹ năng/đa lịch,
-sequence-dependent changeover, đa cấp BOM, lưu trữ DB thay vì JSON, giao diện
-Gantt chart.
+chia 1 lot ra nhiều dây chuyền chạy song song, ràng buộc nhân lực đa kỹ
+năng/đa lịch, changeover tiêu tốn nhân lực (hiện sequence-dependent
+changeover đã hỗ trợ - xem mục 8b - nhưng khoảng changeover chưa tính vào
+Cumulative), đa cấp BOM, lưu trữ DB thay vì JSON, giao diện Gantt chart.

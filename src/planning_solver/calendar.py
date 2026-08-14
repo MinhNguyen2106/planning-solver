@@ -187,9 +187,21 @@ class CompressedTimeline:
 
     def duration_in_slots(self, hours_needed: float) -> int:
         """Số slot cần để hoàn thành một khối lượng công việc dài `hours_needed`
-        giờ làm việc thuần (đã trừ thời gian nghỉ)."""
+        giờ làm việc thuần (đã trừ thời gian nghỉ). Luôn >= 1 - dùng cho thời
+        gian SẢN XUẤT thật (không dùng cho khoảng changeover - xem
+        `changeover_slots`, khoảng đó được phép = 0)."""
         slot_hours = self.slot_minutes / 60.0
         return max(1, math.ceil(hours_needed / slot_hours - 1e-9))
+
+    def changeover_slots(self, minutes: float) -> int:
+        """Số slot cho khoảng GAP changeover giữa 2 lệnh liên tiếp trên cùng
+        dây chuyền (scheduler.py, mô hình sequence-dependent changeover).
+        KHÁC `duration_in_slots()` ở chỗ KHÔNG có sàn tối thiểu 1 slot: một
+        luật changeover 0 phút (vd. 2 lệnh cùng sản phẩm chạy liên tiếp)
+        phải cho phép nối liền, không bị ép có khoảng trống nào cả."""
+        if minutes <= 0:
+            return 0
+        return self.duration_in_slots(minutes / 60.0)
 
     def fits_within_horizon(self, earliest_slot: int, duration_slots: int) -> bool:
         return earliest_slot + duration_slots <= self.num_slots()

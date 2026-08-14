@@ -109,7 +109,15 @@
         {"product_id": "P-CHAIR", "rate_per_hour": 40, "changeover_minutes": 30, "required_headcount": 3},
         {"product_id": "P-TABLE", "rate_per_hour": 20, "changeover_minutes": 45, "required_headcount": 4}
       ],
-      "labor_pool_id": "POOL-EP-NHUA"
+      "labor_pool_id": "POOL-EP-NHUA",
+      "sequence_changeovers": [
+        {"to_product_id": "P-CHAIR", "minutes": 15},
+        {"to_product_id": "P-TABLE", "minutes": 15},
+        {"from_product_id": "P-CHAIR", "to_product_id": "P-CHAIR", "minutes": 0},
+        {"from_product_id": "P-TABLE", "to_product_id": "P-TABLE", "minutes": 0},
+        {"from_product_id": "P-CHAIR", "to_product_id": "P-TABLE", "minutes": 90},
+        {"from_product_id": "P-TABLE", "to_product_id": "P-CHAIR", "minutes": 90}
+      ]
     },
     {
       "id": "LINE-A2",
